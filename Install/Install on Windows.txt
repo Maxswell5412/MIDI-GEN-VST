@@ -1,0 +1,33 @@
+MIDI GEN by MB Audio - install on Windows
+==========================================
+Works on 64-bit Windows 10 and 11. Format: VST3 (Ableton, FL Studio, Reaper,
+Bitwig, Studio One, Cubase...).
+
+1. Right-click MIDIGEN-Windows.zip and choose "Extract All...".
+
+2. Open File Explorer and paste this into the address bar, then press Enter:
+      C:\Program Files\Common Files\VST3
+   (Create the VST3 folder if it isn't there.)
+
+3. Drag the whole MIDI GEN.vst3 folder into it. Click "Continue" if Windows
+   asks for administrator permission.
+
+4. Open your DAW and rescan plug-ins.
+   Ableton: Options > Preferences > Plug-Ins > turn on
+   "Use VST3 Plug-In System Folders", then click Rescan.
+   FL Studio: Options > Manage plugins > Find more plugins.
+   MIDI GEN appears under MB Audio as an instrument.
+
+QUICK START
+- Put a chord clip on a MIDI track (for example one dragged out of HOOKSMITH)
+  and put MIDI GEN on the same track.
+- Press LISTEN, then play from the start of the clip. MIDI GEN learns it
+  (pick 4, 8 or 16 bars to match your clip).
+- Pick a STYLE and hit GENERATE: 8 new progressions in the same key and rhythm.
+- Click a card to hear it instead of your clip. Drag a card into your DAW.
+- SIMILARITY = how close to your chords, COLOR = how rich, SPICE = passing
+  chords and twists, BASS MOTION = inversions and pedal bass.
+- LOAD puts your own synth on it, or use the built-in keys.
+
+If Windows Defender / SmartScreen warns about it, that's because it isn't
+code-signed yet. Choose "More info" > "Run anyway" or allow it.

@@ -1,0 +1,38 @@
+MIDI GEN by MB Audio - install on a Mac
+========================================
+Works on Intel and Apple Silicon (M1/M2/M3/M4) Macs, macOS 11 or newer.
+Formats: AU (Ableton, Logic, GarageBand...) and VST3 (Ableton, FL Studio, Reaper, Bitwig...).
+
+1. Double-click MIDIGEN-Mac.zip to unzip it.
+
+2. In Finder, click Go > Go to Folder... and paste:
+      ~/Library/Audio/Plug-Ins/Components
+   Drag MIDI GEN.component into that folder.
+
+3. Go > Go to Folder... again and paste:
+      ~/Library/Audio/Plug-Ins/VST3
+   Drag MIDI GEN.vst3 into that folder.
+   (If a folder doesn't exist yet, create it with File > New Folder.)
+
+4. MIDI GEN isn't from the App Store, so macOS blocks it until you run this
+   once. Open Terminal (Applications > Utilities > Terminal), paste this whole
+   line and press Return:
+
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/"MIDI GEN.component" ~/Library/Audio/Plug-Ins/VST3/"MIDI GEN.vst3"
+
+5. Open your DAW and rescan plug-ins.
+   Ableton: Settings > Plug-Ins > turn on "Use Audio Units v2" and
+   "Use VST3 Plug-In System Folders", then click Rescan.
+   Logic: it scans by itself on launch.
+   MIDI GEN appears under MB Audio as an instrument.
+
+QUICK START
+- Put a chord clip on a MIDI track (for example one dragged out of HOOKSMITH)
+  and put MIDI GEN on the same track.
+- Press LISTEN, then play from the start of the clip. MIDI GEN learns it
+  (pick 4, 8 or 16 bars to match your clip).
+- Pick a STYLE and hit GENERATE: 8 new progressions in the same key and rhythm.
+- Click a card to hear it instead of your clip. Drag a card into your DAW.
+- SIMILARITY = how close to your chords, COLOR = how rich, SPICE = passing
+  chords and twists, BASS MOTION = inversions and pedal bass.
+- LOAD puts your own synth on it, or use the built-in keys.

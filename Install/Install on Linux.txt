@@ -1,0 +1,16 @@
+INSTALL ON LINUX (64-bit)
+
+Plugin (VST3) - for Bitwig, REAPER, Ardour and other Linux DAWs
+1. Unzip the download.
+2. Copy the .vst3 folder into:  ~/.vst3/
+   (create the folder if it doesn't exist:  mkdir -p ~/.vst3)
+3. Open your DAW and rescan plugins.
+
+Standalone app (no DAW needed)
+1. Open a terminal in the unzipped folder.
+2. Run:  chmod +x "./MIDI GEN"   then   "./MIDI GEN"
+3. Pick your audio and MIDI devices under Options > Audio/MIDI Settings.
+
+Needs: ALSA or JACK audio (standard on most distros).
+
+Free forever. If it helps your music, the Sponsor button on the GitHub page supports new plugins.
