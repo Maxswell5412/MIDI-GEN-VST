@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(MidiGen VERSION 0.1.0)
+project(MidiGen VERSION 0.1.1)
 
 # ---------------------------------------------------------------------------
 # JUCE: use a local copy if you point JUCE_DIR at one, otherwise download it.
@@ -91,3 +91,11 @@ target_sources(MidiGenPluginTests PRIVATE Tests/PluginTests.cpp)
 target_compile_features(MidiGenPluginTests PRIVATE cxx_std_17)
 target_compile_definitions(MidiGenPluginTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(MidiGenPluginTests PRIVATE MidiGen juce::juce_audio_utils juce::juce_recommended_config_flags)
+
+# Promo video renderer (real screen + real sound): cmake --build build --target MidiGenVideoKit
+juce_add_console_app(MidiGenVideoKit PRODUCT_NAME "MidiGenVideoKit")
+set_target_properties(MidiGenVideoKit PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_sources(MidiGenVideoKit PRIVATE Tools/VideoKit.cpp)
+target_compile_features(MidiGenVideoKit PRIVATE cxx_std_17)
+target_compile_definitions(MidiGenVideoKit PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1)
+target_link_libraries(MidiGenVideoKit PRIVATE MidiGen juce::juce_audio_utils juce::juce_audio_formats juce::juce_recommended_config_flags)

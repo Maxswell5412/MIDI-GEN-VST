@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Reharm.h"
 #include "SketchSynth.h"
+#include <vector>
 
 // -----------------------------------------------------------------------------
 // MIDI GEN by MB Audio
@@ -61,7 +62,11 @@ public:
     void unloadInstrument();
     juce::AudioPluginInstance* getInstrument() const { return instrument.get(); }
 
-    void poll() { timerCallback(); }   // for the tests (normally the timer does this)
+    void poll() { timerCallback(); }
+    void tick() { timerCallback(); }
+    // Built-in sound: menu index 0 = Auto (the style's sound)
+    static const std::vector<int>& patchList();
+    int builtInPatch() const;   // for the tests (normally the timer does this)
 
     juce::AudioProcessorValueTreeState apvts;
     std::atomic<double> displayPos { -1.0 };

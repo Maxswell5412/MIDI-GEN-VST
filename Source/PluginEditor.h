@@ -42,10 +42,12 @@ class MidiGenPanel : public juce::Component,
                      private juce::Timer
 {
 public:
+    void tick() { timerCallback(); }   // one UI update (video renderer)
     explicit MidiGenPanel (MidiGenProcessor&);
     ~MidiGenPanel() override;
     static constexpr int designW = 1100, designH = 730;
 
+    void mouseDown (const juce::MouseEvent&) override;
     void paint (juce::Graphics&) override;
     void resized() override;
     bool isInterestedInFileDrag (const juce::StringArray&) override;
@@ -64,6 +66,7 @@ private:
     juce::TooltipWindow tooltips { this, 500 };
     juce::Image background;
     juce::Rectangle<int> headerArea, controlArea, cardArea, bottomArea, lcdArea, instLcd;
+    int shownPatch = -1;
 
     ui::LedButton listenButton { "Listen", ui::Col::green };
     juce::OwnedArray<ui::LedButton> barButtons;

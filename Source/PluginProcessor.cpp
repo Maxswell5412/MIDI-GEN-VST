@@ -35,11 +35,34 @@ juce::AudioProcessorValueTreeState::ParameterLayout MidiGenProcessor::createLayo
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "bars", 1 }, "Listen Length", StringArray { "4 Bars", "8 Bars", "16 Bars" }, 0));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "sound", 1 }, "Sound",
                                                         StringArray { "Plugin / Built-in", "Built-in", "MIDI Out Only" }, 0));
+    {
+        StringArray names { "Auto" };
+        for (int pt : MidiGenProcessor::patchList()) names.add (String (hs::SketchSynth::patchName (pt)));
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "patch", 1 }, "Built-in Sound", names, 0));
+    }
     flt ("vol", "Volume", 0.0f, 1.0f, 0.8f);
     bln ("midiOut", "MIDI Out", true);
     bln ("play", "Play (without DAW)", false);
     flt ("bpm", "Tempo (without DAW)", 60.0f, 180.0f, 120.0f);
     return layout;
+}
+
+const std::vector<int>& MidiGenProcessor::patchList()
+{
+    using P = hs::SketchSynth;
+    static const std::vector<int> list { P::EPiano, P::Piano, P::Pad, P::Strings, P::Pluck, P::Organ, P::SuperSaw, P::LoFiKeys };
+    return list;
+}
+
+int MidiGenProcessor::builtInPatch() const
+{
+    using P = hs::SketchSynth;
+    const int idx = (int) apvts.getRawParameterValue ("patch")->load();
+    if (idx > 0 && idx <= (int) patchList().size()) return patchList()[(size_t) idx - 1];
+    // Auto: the sound of the style
+    static const int byStyle[] = { P::Piano, P::Pad, P::Strings, P::Piano, P::Organ, P::Pluck, P::EPiano, P::SuperSaw };
+    const int st = juce::jlimit (0, 7, (int) apvts.getRawParameterValue ("style")->load());
+    return byStyle[st];
 }
 
 MidiGenProcessor::MidiGenProcessor()
@@ -430,6 +453,7 @@ void MidiGenProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         if (! usedPlugin && sound != 2)
         {
             chunkBuf.clear();
+            keys.setPatch (builtInPatch());
             keys.render (toInst, chunkBuf.getWritePointer (0), chunkBuf.getWritePointer (1), len, vol);
             buffer.addFrom (0, start, chunkBuf, 0, 0, len);
             if (buffer.getNumChannels() > 1) buffer.addFrom (1, start, chunkBuf, 1, 0, len);

@@ -458,8 +458,33 @@ void MidiGenPanel::paint (juce::Graphics& g)
     auto* inst = proc.getInstrument();
     g.setFont (Fonts::mono (14.0f));
     g.setColour (inst != nullptr ? Col::amber : Col::dim.brighter (0.2f));
-    g.drawFittedText (inst != nullptr ? inst->getName().toUpperCase() : juce::String ("BUILT-IN KEYS"), instLcd.reduced (8, 0),
+    g.drawFittedText (inst != nullptr ? inst->getName().toUpperCase()
+                                     : (proc.apvts.getRawParameterValue ("patch")->load() < 0.5f ? "AUTO: " : "") + juce::String (hs::SketchSynth::patchName (proc.builtInPatch())), instLcd.reduced (8, 0),
                       juce::Justification::centredLeft, 1, 0.8f);
+}
+
+// Click the instrument display to pick a built-in sound
+void MidiGenPanel::mouseDown (const juce::MouseEvent& e)
+{
+    if (! instLcd.contains (e.getPosition()) || proc.getInstrument() != nullptr) return;
+    auto* prm = proc.apvts.getParameter ("patch");
+    const int cur = (int) proc.apvts.getRawParameterValue ("patch")->load();
+    juce::PopupMenu m;
+    m.addSectionHeader ("BUILT-IN SOUND");
+    m.addItem (1, "Auto (sound of the style)", true, cur == 0);
+    const auto& list = MidiGenProcessor::patchList();
+    for (int i = 0; i < (int) list.size(); ++i)
+        m.addItem (i + 2, juce::String (hs::SketchSynth::patchName (list[(size_t) i])), true, cur == i + 1);
+    juce::Component::SafePointer<MidiGenPanel> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withTargetScreenArea (localAreaToGlobal (instLcd)),
+                     [safe, prm] (int r)
+                     {
+                         if (safe == nullptr || r <= 0) return;
+                         prm->beginChangeGesture();
+                         prm->setValueNotifyingHost (prm->convertTo0to1 ((float) (r - 1)));
+                         prm->endChangeGesture();
+                         safe->repaint();
+                     });
 }
 
 void MidiGenPanel::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -475,6 +500,7 @@ void MidiGenPanel::timerCallback()
     const int bars = (int) proc.apvts.getRawParameterValue ("bars")->load();
     for (int i = 0; i < barButtons.size(); ++i) barButtons[i]->setToggleState (i == bars, juce::dontSendNotification);
     listenButton.setToggleState (proc.getListenState() == 1 || proc.getListenState() == 2, juce::dontSendNotification);
+    if (const int pt = proc.builtInPatch(); pt != shownPatch) { shownPatch = pt; repaint (instLcd); }
     const double pos = proc.displayPos.load();
     const int sel = proc.getSelected();
     for (int i = 0; i < cards.size(); ++i)
