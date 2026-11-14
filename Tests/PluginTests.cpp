@@ -2,6 +2,8 @@
 #include "../Source/PluginEditor.h"
 #include <cstdio>
 #include <set>
+#include <array>
+#include <cmath>
 static int failures = 0;
 #define CHECK(c, ...) do { if (!(c)) { ++failures; std::printf ("FAIL %d: ", __LINE__); std::printf (__VA_ARGS__); std::printf ("\n"); } } while (0)
 
@@ -67,17 +69,29 @@ int main()
         juce::String names; for (auto& c : p.getVariations()[0].chords) names << c.name << " ";
         std::printf ("learned: %s(key %d %s)\n", names.toRawUTF8(), p.getSource()->tonicPc, p.getSource()->minor ? "minor" : "major");
         CHECK (p.getSource()->spans.size() == 4 && p.getSource()->tonicPc == 9 && p.getSource()->minor, "Am F C G in A minor");
-        CHECK (p.getVariations().size() == 9, "original + 8");
-        for (size_t i = 1; i < p.getVariations().size(); ++i)
+        CHECK ((int) p.getVariations().size() == MidiGenProcessor::kDial + 1, "original + 8 slots + dial");
+        CHECK (p.getSelected() == MidiGenProcessor::kDial, "after learning you hear the dial");
+        for (int i = 1; i <= 6; ++i)
         {
-            std::printf ("  %s:", p.getVariations()[i].label.c_str());
-            for (auto& c : p.getVariations()[i].chords) std::printf (" %s", c.name.c_str());
-            std::printf ("\n");
+            p.setIdea (i); pump();
+            std::printf ("  idea %d:", i);
+            for (auto& c : p.getVariations()[(size_t) MidiGenProcessor::kDial].chords) std::printf (" %s", c.name.c_str());
+            std::printf ("   [%s]\n", p.getVariations()[(size_t) MidiGenProcessor::kDial].tags.c_str());
         }
     }
     CHECK (! thru.empty(), "the original passes through while listening");
 
-    // pick variation C: the clip's notes are replaced by the new chords, in time with the clip's rhythm
+    // SAVE ideas 2, 4, 5 into slots A, B, C
+    for (int i : { 2, 4, 5 }) { p.setIdea (i); pump(); CHECK (p.save() >= 1, "saved idea %d", i); }
+    CHECK (p.slotUsed (1) && p.slotUsed (2) && p.slotUsed (3) && ! p.slotUsed (4), "three slots used");
+    p.setIdea (4); pump();
+    const auto slotB = p.getVariations()[2];
+    CHECK (slotB.chords.size() == p.getVariations()[(size_t) MidiGenProcessor::kDial].chords.size()
+           && slotB.chords[0].name == p.getVariations()[(size_t) MidiGenProcessor::kDial].chords[0].name, "slot B = idea 4");
+    p.setIdea (9); pump();
+    CHECK (p.getVariations()[2].chords[0].name == slotB.chords[0].name, "a saved slot doesn't change when the dial turns");
+
+    // play slot C: only its chords, on the grid, keeping the clip's rhythm, and NO silent gaps
     p.select (3); pump();
     head.ppq = 0.0;
     auto out = run ((int) (spb * 16 / block));
@@ -94,7 +108,39 @@ int main()
     CHECK (ons > 20 && foreign == 0, "only the new chords play (%d notes, %d from the old clip)", ons, foreign);
     CHECK (worst <= 1.0, "on the clip's grid (worst %.1f samples)", worst);
     CHECK (hitBeats.count (1.5) && hitBeats.count (5.5), "keeps the clip's rhythm (and-of-2 hits)");
-    std::printf ("variation C played %d notes, worst timing %.2f samples\n", ons, worst);
+    auto longestGap = [&] (const std::vector<Ev>& evs)
+    {
+        // longest stretch with nothing sounding, after the first note
+        std::array<int, 128> on {}; int sounding = 0; double silentFrom = -1, longest = 0; bool started = false;
+        for (auto& e : evs)
+        {
+            if (e.on) { if (sounding == 0 && silentFrom >= 0) longest = std::max (longest, e.s - silentFrom); if (on[(size_t) e.note]++ == 0) ++sounding; started = true; }
+            else if (on[(size_t) e.note] > 0 && --on[(size_t) e.note] == 0 && --sounding == 0) silentFrom = e.s;
+        }
+        (void) started;
+        return longest;
+    };
+    const double gap = longestGap (out);
+    CHECK (gap <= 2.0, "no silent gaps between chords (longest %.0f samples)", gap);
+    std::printf ("slot C played %d notes, worst timing %.2f samples, longest gap %.0f samples\n", ons, worst, gap);
+
+    // turning the dial while it plays: the new chord is heard at once (not at the next chord)
+    p.select (MidiGenProcessor::kDial); pump();
+    head.ppq = 1.0;
+    run ((int) (spb * 0.25 / block));
+    p.setIdea (17); pump();
+    auto after = run (2);
+    int quickOns = 0; for (auto& e : after) if (e.on && e.s < block * 2) ++quickOns;
+    CHECK (quickOns >= 3, "turning the dial re-strikes the chord straight away (%d notes)", quickOns);
+
+    // GATE 1/8 chops the chords: many more hits
+    if (auto* g8 = p.apvts.getParameter ("gate")) g8->setValueNotifyingHost (g8->convertTo0to1 (2.0f));
+    pump(); head.ppq = 0.0;
+    auto gated = run ((int) (spb * 16 / block));
+    int gatedOns = 0; for (auto& e : gated) if (e.on) ++gatedOns;
+    CHECK (gatedOns > ons * 2, "GATE 1/8 makes more hits (%d vs %d)", gatedOns, ons);
+    if (auto* g8 = p.apvts.getParameter ("gate")) g8->setValueNotifyingHost (0.0f);
+    pump();
 
     // back to ORIGINAL: the clip passes through again
     p.select (0); pump();
@@ -102,6 +148,54 @@ int main()
     out = run ((int) (spb * 3.5 / block));
     std::set<int> origNotes; for (auto& e : out) if (e.on) origNotes.insert (e.note);
     { juce::String s; for (int x : origNotes) s << x << " "; CHECK (origNotes == std::set<int> ({ 57, 60, 64, 69 }), "original bar 1 = Am again (got %s)", s.toRawUTF8()); }
+
+    // KEYS mode: D3 plays chord 2 of the selected progression, for as long as it's held; no auto-play
+    {
+        p.select (2); pump();
+        if (auto* k = p.apvts.getParameter ("keys")) k->setValueNotifyingHost (1.0f);
+        pump();
+        head.playing = true; head.ppq = 0.0;
+        juce::AudioBuffer<float> buf (2, block);
+        auto block1 = [&] (juce::MidiBuffer m) { p.processBlock (buf, m); head.ppq += block / spb; std::vector<Ev> e;
+                                                 for (const auto meta : m) if (meta.getMessage().isNoteOnOrOff()) e.push_back ({ (double) meta.samplePosition, meta.getMessage().getNoteNumber(), meta.getMessage().isNoteOn() });
+                                                 return e; };
+        auto quiet = block1 ({});
+        int autoOns = 0; for (int i = 0; i < 50; ++i) for (auto& e : block1 ({})) autoOns += e.on;
+        CHECK (autoOns == 0, "KEYS: nothing plays by itself (%d)", autoOns);
+        juce::MidiBuffer press; press.addEvent (juce::MidiMessage::noteOn (1, 62, (juce::uint8) 90), 10);
+        auto on = block1 (press);
+        std::set<int> got; for (auto& e : on) if (e.on) got.insert (e.note);
+        const auto& chord2 = p.getVariations()[2].chords[1].notes;
+        CHECK (got == std::set<int> (chord2.begin(), chord2.end()), "KEYS: D3 plays chord 2 (%zu notes)", got.size());
+        int heldOffs = 0; for (int i = 0; i < 20; ++i) for (auto& e : block1 ({})) heldOffs += ! e.on;
+        CHECK (heldOffs == 0 && p.heldChord() == 1, "KEYS: the chord holds while the key is down");
+        juce::MidiBuffer rel; rel.addEvent (juce::MidiMessage::noteOff (1, 62), 5);
+        int offs = 0; for (auto& e : block1 (rel)) offs += ! e.on;
+        CHECK (offs == (int) got.size() && p.heldChord() == -1, "KEYS: releasing the key stops the chord (%d offs)", offs);
+        juce::MidiBuffer black; black.addEvent (juce::MidiMessage::noteOn (1, 61, (juce::uint8) 90), 0);
+        int blackOns = 0; for (auto& e : block1 (black)) blackOns += e.on;
+        CHECK (blackOns == 0, "KEYS: black keys are silent");
+        CHECK (MidiGenProcessor::chordForKey (60, 4) == 0 && MidiGenProcessor::chordForKey (65, 4) == 3 && MidiGenProcessor::chordForKey (67, 4) == 0
+               && MidiGenProcessor::chordForKey (59, 4) == 3, "KEYS: C3 D3 E3 F3 = 1 2 3 4, then it repeats");
+        if (auto* k = p.apvts.getParameter ("keys")) k->setValueNotifyingHost (0.0f);
+        pump();
+        std::printf ("KEYS: D3 played %zu notes\n", got.size());
+    }
+
+    // tone section doesn't blow up: run the built-in sound with everything turned
+    for (auto id : { "hp", "lp", "res", "mbLow", "mbHigh", "squash" })
+        if (auto* prm = p.apvts.getParameter (id)) prm->setValueNotifyingHost (juce::String (id) == "lp" ? 0.4f : 0.8f);
+    p.select (MidiGenProcessor::kDial); pump();
+    {
+        head.ppq = 0.0;
+        juce::AudioBuffer<float> buf (2, block); float peak = 0; bool finite = true;
+        for (int b = 0; b < 200; ++b)
+        {
+            juce::MidiBuffer m; p.processBlock (buf, m); head.ppq += block / spb;
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < block; ++i) { const float x = buf.getSample (c, i); finite = finite && std::isfinite (x); peak = std::max (peak, std::abs (x)); }
+        }
+        CHECK (finite && peak > 0.01f && peak < 4.0f, "tone section output is sane (peak %.3f)", peak);
+    }
 
     if (auto* snap = std::getenv ("MG_SNAPSHOT"))
     {
@@ -118,14 +212,17 @@ int main()
     const auto f = p.writeMidiFile (2);
     CHECK (f.existsAsFile(), "midi export"); std::printf ("export: %s\n", f.getFileName().toRawUTF8());
     const auto all = p.writeMidiFile (-1);
-    CHECK (all.getSize() > f.getSize() * 4, "all 8 export");
+    CHECK (all.getSize() > f.getSize() * 2, "export all saved");
+    CHECK (! p.writeMidiFile (6).existsAsFile(), "an empty slot exports nothing");
     juce::MemoryBlock st; p.getStateInformation (st);
     MidiGenProcessor q; q.setStateInformation (st.getData(), (int) st.getSize());
     bool same = q.getVariations().size() == p.getVariations().size();
-    for (size_t i = 0; same && i < q.getVariations().size(); ++i)
-        same = q.getVariations()[i].chords.size() == p.getVariations()[i].chords.size()
-            && q.getVariations()[i].chords[0].name == p.getVariations()[i].chords[0].name;
-    CHECK (same, "the same 8 progressions come back with the project");
+    for (int i = 1; same && i <= 3; ++i)
+        same = q.getVariations()[(size_t) i].chords.size() == p.getVariations()[(size_t) i].chords.size()
+            && q.getVariations()[(size_t) i].chords[0].name == p.getVariations()[(size_t) i].chords[0].name;
+    CHECK (same && q.slotUsed (3) && ! q.slotUsed (4), "saved slots come back with the project");
+    q.clearSlot (2);
+    CHECK (! q.slotUsed (2), "clear a slot");
 
     // learning from a HOOKSMITH export file
     if (auto* hs = std::getenv ("HS_FILE"))

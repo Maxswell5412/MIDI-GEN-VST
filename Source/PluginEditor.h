@@ -45,7 +45,7 @@ public:
     void tick() { timerCallback(); }   // one UI update (video renderer)
     explicit MidiGenPanel (MidiGenProcessor&);
     ~MidiGenPanel() override;
-    static constexpr int designW = 1100, designH = 730;
+    static constexpr int designW = 1100, designH = 880;
 
     void mouseDown (const juce::MouseEvent&) override;
     void paint (juce::Graphics&) override;
@@ -65,7 +65,7 @@ private:
     ui::Look look;
     juce::TooltipWindow tooltips { this, 500 };
     juce::Image background;
-    juce::Rectangle<int> headerArea, controlArea, cardArea, bottomArea, lcdArea, instLcd;
+    juce::Rectangle<int> headerArea, controlArea, cardArea, toneArea, bottomArea, lcdArea, instLcd, ideaReadout;
     int shownPatch = -1;
 
     ui::LedButton listenButton { "Listen", ui::Col::green };
@@ -74,7 +74,11 @@ private:
     ui::LedButton loadMidiButton { "Load MIDI", ui::Col::amber, false };
 
     juce::ComboBox style;
-    ui::Knob similarity, color, spice, bassMotion;
+    ui::Knob flavor, similarity, color, spice, bassMotion;
+    ui::Knob idea;
+    ui::LedButton saveButton { "Save", ui::Col::green, false };
+    ui::LedButton prevButton { "<", ui::Col::amber, false }, nextButton { ">", ui::Col::amber, false };
+    ui::Knob gate, length, envA, envD, envS, envR, hp, lp, res, mbLow, mbMid, mbHigh, squash;
     ui::LedButton rhythmButton { "Keep Rhythm", ui::Col::amber };
     ui::LedButton bassButton { "Add Bass", ui::Col::amber };
 
@@ -87,14 +91,17 @@ private:
     ui::Knob vol, bpm;
     ui::LedButton midiOutButton { "MIDI Out", ui::Col::green };
     ui::LedButton playButton { "Play", ui::Col::green };
+    ui::LedButton keysButton { "Keys", ui::Col::cyan };
     mg::DragAllTile dragAll;
 
     using SA = juce::AudioProcessorValueTreeState::SliderAttachment;
     using CA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using BA = juce::AudioProcessorValueTreeState::ButtonAttachment;
     std::unique_ptr<CA> styleA, soundA;
-    std::unique_ptr<SA> simA, colorA, spiceA, bassA, volA, bpmA;
-    std::unique_ptr<BA> rhythmA, addBassA, midiOutA, playA;
+    std::unique_ptr<SA> simA, colorA, spiceA, bassA, volA, bpmA, flavorA, ideaA;
+    std::vector<std::unique_ptr<SA>> toneA;
+    std::unique_ptr<BA> rhythmA, addBassA, midiOutA, playA, keysA;
+    int lastHeld = -2;
 
     std::unique_ptr<ui::HostedWindow> window;
     std::unique_ptr<juce::FileChooser> chooser;

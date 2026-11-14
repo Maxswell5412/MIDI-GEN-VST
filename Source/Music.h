@@ -50,7 +50,8 @@ int genreDefaultBpm (int genre);
 
 // ---- Chords ------------------------------------------------------------------
 enum class Q { Maj, Min, Dim, Aug, Sus2, Sus4, Dom7, Maj7, Min7, HalfDim, Dim7, Add9, MinAdd9,
-               Six, Min6, Dom9, Maj9, Min9, Min11, Dom13, Sus7, MinMaj7, Dom11 };
+               Six, Min6, Dom9, Maj9, Min9, Min11, Dom13, Sus7, MinMaj7, Dom11,
+               Sus2_7, SixNine, Dom7s9, Dom7b9, Maj7s11, Maj7Sus2 };
 
 const std::vector<int>& intervals (Q);
 std::string qualitySuffix (Q);
@@ -61,6 +62,7 @@ struct ParsedChord
     Q   q = Q::Maj;
     bool explicitQ = false; // the progression spelled out the quality (e.g. "V7")
     int accidental = 0;     // -1 flat, +1 sharp (for spelling the name)
+    int bassRel = -1;       // slash chord: bass note above the tonic (e.g. "i6/bIII"), -1 = root
     bool ok = false;
 };
 
@@ -82,6 +84,9 @@ struct ChordSpan
     std::string name;            // e.g. "Am9"
     std::string roman;           // e.g. "vi"
     int rootPc = 0;
+    int bassPc = -1;             // slash chord bass, -1 = root
+    bool spice = false;          // a passing / anticipated chord added by SPICE
+    int bassNote() const { return bassPc >= 0 ? bassPc : rootPc; }
 };
 
 struct Pattern
@@ -127,6 +132,7 @@ struct Settings
     int scale = 0;               // 0 = Auto
     int progression = 0;         // 0 = Auto (PROGRESSOR), 1.. = named progression of the genre
     float complexity = 0.5f;     // how rich the harmony / how busy the variations
+    float spice = 0.35f;         // passing chords, pushes, sus resolves, extensions
     float density = 0.5f;        // how many notes
     float groove = 0.5f;         // SWING: 0 straight, 0.5 genre swing, 1 double swing
     float humanize = 0.25f;
@@ -137,6 +143,15 @@ struct Settings
     float dynamics = 0.5f;       // accents and phrasing in the velocities
     float strum = 0.3f;          // chords: spread the notes like a hand / a guitar strum
     uint32_t harmonySeed = 1, melodySeed = 2, bassSeed = 3, drumSeed = 4;
+    // GENERATE takes: 0 = the idea itself, 1 and 2 = close variations of it (same seed)
+    std::array<int, kNumLanes> variant { 0, 0, 0, 0 };
+    // LENGTH dial per part: note length x 0.1 .. 2 (1 = as written)
+    std::array<float, kNumLanes> noteLength { 1.0f, 1.0f, 1.0f, 1.0f };
+    // COLOR > MACHINE per part: 0 off, 1 MPC60, 2 MPC2000, 3 MPC3000, 4 SP-1200, with its FLAVOR 0..1
+    std::array<int, kNumLanes> machine { 0, 0, 0, 0 };
+    std::array<float, kNumLanes> machineFlavor { 0.5f, 0.5f, 0.5f, 0.5f };
+    std::array<float, kNumLanes> machineExaggerate { 0, 0, 0, 0 };   // push the machine past its real specs
+    std::array<float, kNumLanes> machineFunk { 0, 0, 0, 0 };         // random push/pull and accents
     std::shared_ptr<const ImportedProgression> imported;   // set = use these chords instead of the PROGRESSOR
 };
 
@@ -160,5 +175,5 @@ std::array<PadChord, 12> chordBank (const Settings&);
 
 // Voice a chord close to the previous voicing (smooth voice leading).
 std::vector<int> voiceChord (int rootPc, const std::vector<int>& intervals, int genre,
-                             const std::vector<int>& previous, int centre);
+                             const std::vector<int>& previous, int centre = 62, bool wide = false, int bassPc = -1);
 } // namespace hs

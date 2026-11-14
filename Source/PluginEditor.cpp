@@ -15,8 +15,9 @@ void Card::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat().reduced (2.0f);
     const auto& vars = proc.getVariations();
-    const bool has = index < (int) vars.size();
+    const bool has = index < (int) vars.size() && ! vars[(size_t) index].chords.empty();
     const bool selected = proc.getSelected() == index;
+    const bool isDial = index == MidiGenProcessor::kDial;
 
     g.setColour (juce::Colours::black.withAlpha (0.55f));
     g.fillRoundedRectangle (r.translated (0, 2), 7.0f);
@@ -37,9 +38,10 @@ void Card::paint (juce::Graphics& g)
 
     auto inner = r.reduced (12.0f, 8.0f);
     auto top = inner.removeFromTop (22.0f);
-    const juce::String label = index == 0 ? "ORIGINAL" : juce::String::charToString ((juce::juce_wchar) ('A' + index - 1));
-    glowText (g, label, top.removeFromLeft (index == 0 ? 120.0f : 30.0f), Fonts::logo (index == 0 ? 13.0f : 17.0f),
-              selected ? Col::amber : Col::engrave.withAlpha (has ? 1.0f : 0.4f), juce::Justification::centredLeft);
+    const juce::String label = index == 0 ? juce::String ("ORIGINAL") : isDial ? "IDEA " + juce::String (proc.getIdea())
+                                          : juce::String::charToString ((juce::juce_wchar) ('A' + index - 1));
+    glowText (g, label, top.removeFromLeft (index == 0 || isDial ? 120.0f : 30.0f), Fonts::logo (index == 0 ? 13.0f : isDial ? 16.0f : 17.0f),
+              selected ? Col::amber : isDial ? Col::cyan : Col::engrave.withAlpha (has ? 1.0f : 0.4f), juce::Justification::centredLeft);
     led (g, { top.getRight() - 6.0f, top.getCentreY() }, 4.0f, index == 0 ? Col::green : Col::amber, selected && playPos >= 0.0);
     top.removeFromRight (16.0f);
 
@@ -47,8 +49,8 @@ void Card::paint (juce::Graphics& g)
     {
         g.setFont (Fonts::body (14.0f));
         g.setColour (Col::dim);
-        g.drawFittedText (index == 0 ? "Press LISTEN and play your chord clip,\nor drop a MIDI file on MIDI GEN"
-                                     : "New progressions appear here",
+        g.drawFittedText (index == 0 || (isDial && proc.getSource() == nullptr) ? "Press LISTEN and play your chord clip,\nor drop a MIDI file on MIDI GEN"
+                                     : isDial ? "Turn the IDEA dial" : "EMPTY\nturn the dial, press SAVE",
                           inner.toNearestInt(), juce::Justification::centred, 2);
         return;
     }
@@ -68,12 +70,15 @@ void Card::paint (juce::Graphics& g)
     const double L = proc.getSource() != nullptr ? proc.getSource()->lengthBeats : 16.0;
     lcdBox (g, inner);
     auto strip = inner.reduced (4.0f);
+    const bool keys = proc.keysMode() && selected;
+    int ci = -1;
     for (auto& c : v.chords)
     {
+        ++ci;
         const float x0 = strip.getX() + (float) (c.start / L) * strip.getWidth();
         const float x1 = strip.getX() + (float) ((c.start + c.len) / L) * strip.getWidth();
         auto cell = juce::Rectangle<float> (x0, strip.getY(), x1 - x0, strip.getHeight()).reduced (1.0f, 0.0f);
-        const bool now = selected && playPos >= c.start && playPos < c.start + c.len;
+        const bool now = keys ? proc.heldChord() == ci : (selected && playPos >= c.start && playPos < c.start + c.len);
         const auto col = c.changed ? Col::cyan : Col::amber;
         g.setColour (col.withAlpha (now ? 0.3f : 0.08f));
         g.fillRoundedRectangle (cell, 3.0f);
@@ -81,8 +86,15 @@ void Card::paint (juce::Graphics& g)
         g.setFont (Fonts::mono (fh));
         g.setColour (now ? juce::Colours::white : col);
         g.drawFittedText (c.name, cell.reduced (2.0f, 0.0f).toNearestInt(), juce::Justification::centred, 2, 0.7f);
+        if (keys)
+        {
+            // which key plays this chord
+            g.setFont (Fonts::mono (9.5f));
+            g.setColour (Col::cyan.withAlpha (0.85f));
+            g.drawText (MidiGenProcessor::keyName (ci), cell.reduced (3.0f, 2.0f), juce::Justification::topLeft);
+        }
     }
-    if (selected && playPos >= 0.0)
+    if (selected && playPos >= 0.0 && ! keys)
     {
         const float x = strip.getX() + (float) (playPos / L) * strip.getWidth();
         g.setColour (juce::Colour (0xffffe0b0));
@@ -90,9 +102,20 @@ void Card::paint (juce::Graphics& g)
     }
 }
 
-void Card::mouseDown (const juce::MouseEvent&)
+void Card::mouseDown (const juce::MouseEvent& e)
 {
     dragging = false;
+    if (e.mods.isPopupMenu() && proc.slotUsed (index))
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Clear slot " + juce::String::charToString ((juce::juce_wchar) ('A' + index - 1)));
+        juce::Component::SafePointer<Card> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int r)
+        {
+            if (safe != nullptr && r == 1) { safe->proc.clearSlot (safe->index); if (auto* p = safe->getParentComponent()) p->repaint(); }
+        });
+        return;
+    }
     if (index < (int) proc.getVariations().size()) proc.select (index);
     if (auto* p = getParentComponent()) p->repaint();
 }
@@ -104,7 +127,7 @@ void Card::mouseDoubleClick (const juce::MouseEvent&)
 
 void Card::mouseDrag (const juce::MouseEvent& e)
 {
-    if (dragging || e.getDistanceFromDragStart() < 6 || index >= (int) proc.getVariations().size()) return;
+    if (dragging || e.getDistanceFromDragStart() < 6 || index >= (int) proc.getVariations().size() || proc.getVariations()[(size_t) index].chords.empty()) return;
     dragging = true;
     const auto f = proc.writeMidiFile (index);
     if (f.existsAsFile()) juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
@@ -122,7 +145,7 @@ void DragAllTile::paint (juce::Graphics& g)
     g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
     g.setFont (Fonts::label (13.0f));
     g.setColour (Col::engrave);
-    g.drawFittedText ("DRAG ALL 8", r.toNearestInt(), juce::Justification::centred, 1);
+    g.drawFittedText ("DRAG SAVED", r.toNearestInt(), juce::Justification::centred, 1);
 }
 
 void DragAllTile::mouseDrag (const juce::MouseEvent& e)
@@ -162,7 +185,7 @@ MidiGenPanel::MidiGenPanel (MidiGenProcessor& p) : proc (p), dragAll (p)
         addAndMakeVisible (b);
     }
     generateButton.getProperties().set ("accent", true);
-    generateButton.setTooltip ("Write 8 new progressions (same key, same rhythm)");
+    generateButton.setTooltip ("A whole new set of 100 ideas on the IDEA dial (same key, same rhythm). Your saved slots stay");
     generateButton.onClick = [this] { proc.generate(); };
     loadMidiButton.setTooltip ("Learn from a MIDI file instead (you can also drag .mid files onto MIDI GEN)");
     loadMidiButton.onClick = [this]
@@ -191,9 +214,63 @@ MidiGenPanel::MidiGenPanel (MidiGenProcessor& p) : proc (p), dragAll (p)
     bassButton.setTooltip ("ADD BASS: put the bass note underneath each chord");
     rhythmButton.setClickingTogglesState (true);
     bassButton.setClickingTogglesState (true);
-    for (juce::Component* c : { (juce::Component*) &style, (juce::Component*) &similarity, (juce::Component*) &color, (juce::Component*) &spice,
+    flavor.setTooltip ("FLAVOR: the kind of chords the ideas reach for, in the same key. Auto = the style's own. Soul Keys, West Coast, Dance Kiss, Neo Gold, Dark Trap, Gospel Lift, Cinema, Lo-Fi Jazz");
+    flavor.setSteps ((int) hs::flavorNames().size());
+    flavor.setCap (Col::capOrange);
+    similarity.setCap (Col::capGrey); color.setCap (Col::capBlue); spice.setCap (Col::capRed); bassMotion.setCap (Col::capBrown);
+    for (juce::Component* c : { (juce::Component*) &style, (juce::Component*) &flavor, (juce::Component*) &similarity, (juce::Component*) &color, (juce::Component*) &spice,
                                 (juce::Component*) &bassMotion, (juce::Component*) &rhythmButton, (juce::Component*) &bassButton })
         addAndMakeVisible (c);
+    flavorA = std::make_unique<SA> (proc.apvts, "flavor", flavor);
+
+    // ---- the IDEA dial
+    idea.setCap (Col::capRed);
+    idea.setSteps (0);
+    idea.setMouseDragSensitivity (900);
+    idea.setTooltip ("IDEA: turn it. Every click is a new progression in the same key and rhythm, playing straight away. Hear one you love? Press SAVE");
+    ideaA = std::make_unique<SA> (proc.apvts, "idea", idea);
+    saveButton.getProperties().set ("accent", true);
+    saveButton.setTooltip ("SAVE the idea on the dial into the next free slot (A to H). Then keep turning");
+    saveButton.onClick = [this]
+    {
+        const int slot = proc.save();
+        setStatus (slot > 0 ? "SAVED IDEA " + juce::String (proc.getIdea()) + " TO SLOT " + juce::String::charToString ((juce::juce_wchar) ('A' + slot - 1))
+                            : proc.hasSource() ? juce::String ("SLOTS FULL: RIGHT-CLICK ONE TO CLEAR IT") : juce::String ("LISTEN FIRST"));
+    };
+    prevButton.setTooltip ("Previous idea");
+    nextButton.setTooltip ("Next idea");
+    prevButton.onClick = [this] { proc.setIdea (proc.getIdea() - 1); };
+    nextButton.onClick = [this] { proc.setIdea (proc.getIdea() + 1); };
+    for (juce::Component* c : { (juce::Component*) &idea, (juce::Component*) &saveButton, (juce::Component*) &prevButton, (juce::Component*) &nextButton })
+        addAndMakeVisible (c);
+
+    // ---- SHAPE + TONE
+    struct T { ui::Knob* k; const char* id; juce::Colour cap; const char* tip; bool bip; };
+    const T tones[] = {
+        { &gate,   "gate",   Col::capOrange, "GATE: chops the chords into a rhythm locked to your DAW (1/4 ... 1/16, triplets, offbeat, bounce, house stab, trance, pump)", false },
+        { &length, "length", Col::capWhite,  "LENGTH: how long each chord rings. Middle = up to the next hit (legato), left = short stabs, right = overlap", false },
+        { &envA,   "envA",   Col::capGreen,  "ATTACK of the built-in sound (middle = as designed)", false },
+        { &envD,   "envD",   Col::capGreen,  "DECAY of the built-in sound (middle = as designed)", false },
+        { &envS,   "envS",   Col::capGreen,  "SUSTAIN of the built-in sound (middle = as designed)", false },
+        { &envR,   "envR",   Col::capGreen,  "RELEASE of the built-in sound (middle = as designed)", false },
+        { &hp,     "hp",     Col::capBlue,   "HIGH PASS filter: cuts the lows (off at the left, up to 2 kHz)", false },
+        { &lp,     "lp",     Col::capBlue,   "LOW PASS filter: cuts the highs (off at the right, down to 200 Hz)", false },
+        { &res,    "res",    Col::capBlue,   "RESONANCE of both filters", false },
+        { &mbLow,  "mbLow",  Col::capBrown,  "MULTIBAND LOW (below 200 Hz): -12 to +12 dB", true },
+        { &mbMid,  "mbMid",  Col::capBrown,  "MULTIBAND MID (200 Hz to 2.5 kHz): -12 to +12 dB", true },
+        { &mbHigh, "mbHigh", Col::capBrown,  "MULTIBAND HIGH (above 2.5 kHz): -12 to +12 dB", true },
+        { &squash, "squash", Col::capRed,    "SQUASH: 3-band compression that glues and thickens the chords", false },
+    };
+    for (auto& t : tones)
+    {
+        t.k->setCap (t.cap);
+        t.k->setTooltip (t.tip);
+        if (t.bip) t.k->setBipolar (true);
+        addAndMakeVisible (t.k);
+        toneA.push_back (std::make_unique<SA> (proc.apvts, t.id, *t.k));
+    }
+    gate.setSteps ((int) hs::gateNames().size());
+    vol.setCap (Col::capWhite); bpm.setCap (Col::capBlack);
     styleA  = std::make_unique<CA> (proc.apvts, "style", style);
     simA    = std::make_unique<SA> (proc.apvts, "similarity", similarity);
     colorA  = std::make_unique<SA> (proc.apvts, "color", color);
@@ -202,11 +279,12 @@ MidiGenPanel::MidiGenPanel (MidiGenProcessor& p) : proc (p), dragAll (p)
     rhythmA = std::make_unique<BA> (proc.apvts, "keepRhythm", rhythmButton);
     addBassA = std::make_unique<BA> (proc.apvts, "addBass", bassButton);
 
-    for (int i = 0; i < 9; ++i)
+    for (int i = 0; i <= MidiGenProcessor::kDial; ++i)
     {
         auto* c = cards.add (new Card (proc, i));
         c->setTooltip (i == 0 ? "Your original progression. Click to hear it again"
-                              : "Click to play this progression instead of yours. Double-click to play it without the DAW. Drag it into Ableton to drop the MIDI");
+                     : i == MidiGenProcessor::kDial ? "The idea on the dial. Click to hear it, drag it into your DAW"
+                     : "A saved idea. Click to play it, double-click to play it without the DAW, drag it into your DAW. Right-click to clear");
         addAndMakeVisible (c);
     }
 
@@ -237,17 +315,20 @@ MidiGenPanel::MidiGenPanel (MidiGenProcessor& p) : proc (p), dragAll (p)
     midiOutButton.setClickingTogglesState (true);
     midiOutButton.setTooltip ("Also send the chords out as MIDI");
     playButton.setClickingTogglesState (true);
+    keysButton.setClickingTogglesState (true);
+    keysButton.setTooltip ("KEYS: play the chords from your MIDI keyboard instead of auto-play. White keys from C3 = chord 1, 2, 3... of the selected progression. Hold a key, the chord holds. Great for recording");
     playButton.setTooltip ("Play the selected progression without pressing play in the DAW");
-    dragAll.setTooltip ("Drag all 8 new progressions into Ableton as one clip, back to back. Click to save it");
+    dragAll.setTooltip ("Drag all your saved ideas into the DAW as one clip, back to back. Click to save it as a file");
     for (juce::Component* c : { (juce::Component*) &loadButton, (juce::Component*) &showButton, (juce::Component*) &ejectButton,
                                 (juce::Component*) &sound, (juce::Component*) &vol, (juce::Component*) &bpm, (juce::Component*) &midiOutButton,
-                                (juce::Component*) &playButton, (juce::Component*) &dragAll })
+                                (juce::Component*) &playButton, (juce::Component*) &keysButton, (juce::Component*) &dragAll })
         addAndMakeVisible (c);
     soundA   = std::make_unique<CA> (proc.apvts, "sound", sound);
     volA     = std::make_unique<SA> (proc.apvts, "vol", vol);
     bpmA     = std::make_unique<SA> (proc.apvts, "bpm", bpm);
     midiOutA = std::make_unique<BA> (proc.apvts, "midiOut", midiOutButton);
     playA    = std::make_unique<BA> (proc.apvts, "play", playButton);
+    keysA    = std::make_unique<BA> (proc.apvts, "keys", keysButton);
 
     proc.addChangeListener (this);
     setSize (kW, kH);
@@ -308,7 +389,8 @@ void MidiGenPanel::resized()
     headerArea  = { x0, 14, w, 64 };
     controlArea = { x0, 90, w, 104 };
     cardArea    = { x0, 204, w, 400 };
-    bottomArea  = { x0, 614, w, 102 };
+    toneArea    = { x0, 614, w, 122 };
+    bottomArea  = { x0, 746, w, 120 };
 
     auto h = headerArea.reduced (14, 0);
     h.removeFromLeft (250);
@@ -320,40 +402,70 @@ void MidiGenPanel::resized()
     lcdArea = h.removeFromRight (330).withSizeKeepingCentre (330, 46);
 
     auto c = controlArea.reduced (14, 0);
-    style.setBounds (c.getX(), controlArea.getY() + 32, 260, 30);
-    auto kn = juce::Rectangle<int> (c.getX() + 300, controlArea.getY() + 18, 4 * 100, 64);
-    for (auto* k : { &similarity, &color, &spice, &bassMotion })
-        k->setBounds (kn.removeFromLeft (100).withSizeKeepingCentre (56, 56));
-    auto t = juce::Rectangle<int> (c.getRight() - 300, controlArea.getY() + 28, 140, 64);
+    style.setBounds (c.getX(), controlArea.getY() + 32, 250, 30);
+    auto kn = juce::Rectangle<int> (c.getX() + 262, controlArea.getY() + 16, 5 * 88, 66);
+    for (auto* k : { &flavor, &similarity, &color, &spice, &bassMotion })
+        k->setBounds (kn.removeFromLeft (88).withSizeKeepingCentre (60, 60));
+    auto t = juce::Rectangle<int> (c.getRight() - 286, controlArea.getY() + 28, 136, 64);
     rhythmButton.setBounds (t.removeFromTop (30));
     t.removeFromTop (6);
     bassButton.setBounds (t.removeFromTop (30));
-    loadMidiButton.setBounds (c.getRight() - 140, controlArea.getY() + 28, 140, 30);
+    loadMidiButton.setBounds (c.getRight() - 136, controlArea.getY() + 28, 136, 30);
 
+    // IDEA dial on the left, the dial's idea + ORIGINAL on top, 8 saved slots below
     auto cr = cardArea.reduced (14, 0).withTrimmedTop (32).withTrimmedBottom (12);
-    const int cw = (cr.getWidth() - 20) / 3, ch = (cr.getHeight() - 20) / 3;
-    for (int i = 0; i < 9; ++i)
-        cards[i]->setBounds (cr.getX() + (i % 3) * (cw + 10), cr.getY() + (i / 3) * (ch + 10), cw, ch);
+    auto left = cr.removeFromLeft (230);
+    cr.removeFromLeft (12);
+    idea.setBounds (left.getX() + 25, left.getY() + 2, 180, 180);
+    ideaReadout = { left.getX(), left.getY() + 186, 230, 40 };
+    auto row = juce::Rectangle<int> (left.getX(), left.getY() + 232, 230, 34);
+    prevButton.setBounds (row.removeFromLeft (44));
+    nextButton.setBounds (row.removeFromRight (44));
+    row.reduce (8, 0);
+    saveButton.setBounds (row);
+    cards[0]->setBounds (left.getX(), left.getY() + 276, 230, left.getBottom() - (left.getY() + 276));
 
-    auto b = bottomArea.reduced (14, 0).withTrimmedTop (32);
-    auto left = b.removeFromLeft (260);
-    instLcd = left.removeFromTop (26);
-    left.removeFromTop (6);
-    auto row = left.removeFromTop (28);
-    loadButton.setBounds (row.removeFromLeft (row.getWidth() - 106));
-    row.removeFromLeft (6);
-    showButton.setBounds (row.removeFromLeft (60));
-    row.removeFromLeft (6);
-    ejectButton.setBounds (row);
+    auto topRow = cr.removeFromTop (118);
+    cards[MidiGenProcessor::kDial]->setBounds (topRow);
+    cr.removeFromTop (10);
+    const int cw = (cr.getWidth() - 30) / 4, ch = (cr.getHeight() - 10) / 2;
+    for (int i = 0; i < MidiGenProcessor::kSlots; ++i)
+        cards[i + 1]->setBounds (cr.getX() + (i % 4) * (cw + 10), cr.getY() + (i / 4) * (ch + 10), cw, ch);
+
+    // SHAPE + TONE
+    auto tr = toneArea.reduced (14, 0).withTrimmedTop (30).withTrimmedBottom (20);
+    const ui::Knob* order[] = { &gate, &length, &envA, &envD, &envS, &envR, &hp, &lp, &res, &mbLow, &mbMid, &mbHigh, &squash };
+    const int gaps = 3 * 14;   // a little air between the groups
+    const int kw = (tr.getWidth() - gaps) / 13;
+    int xx = tr.getX();
+    for (int i = 0; i < 13; ++i)
+    {
+        if (i == 2 || i == 6 || i == 9) xx += 14;
+        const_cast<ui::Knob*> (order[i])->setBounds (juce::Rectangle<int> (xx, tr.getY(), kw, tr.getHeight()).withSizeKeepingCentre (54, 54));
+        xx += kw;
+    }
+
+    auto b = bottomArea.reduced (14, 0).withTrimmedTop (34).withTrimmedBottom (10);
+    auto bl = b.removeFromLeft (260);
+    instLcd = bl.removeFromTop (26);
+    bl.removeFromTop (6);
+    auto brow = bl.removeFromTop (28);
+    loadButton.setBounds (brow.removeFromLeft (brow.getWidth() - 106));
+    brow.removeFromLeft (6);
+    showButton.setBounds (brow.removeFromLeft (60));
+    brow.removeFromLeft (6);
+    ejectButton.setBounds (brow);
     b.removeFromLeft (16);
     sound.setBounds (b.removeFromLeft (170).withSizeKeepingCentre (170, 30));
     b.removeFromLeft (10);
-    vol.setBounds (b.removeFromLeft (60).withSizeKeepingCentre (48, 48));
+    vol.setBounds (b.removeFromLeft (64).withSizeKeepingCentre (54, 54));
     b.removeFromLeft (10);
     midiOutButton.setBounds (b.removeFromLeft (110).withSizeKeepingCentre (110, 34));
     b.removeFromLeft (10);
     playButton.setBounds (b.removeFromLeft (90).withSizeKeepingCentre (90, 34));
-    bpm.setBounds (b.removeFromLeft (60).withSizeKeepingCentre (48, 48));
+    bpm.setBounds (b.removeFromLeft (64).withSizeKeepingCentre (54, 54));
+    b.removeFromLeft (10);
+    keysButton.setBounds (b.removeFromLeft (90).withSizeKeepingCentre (90, 34));
     dragAll.setBounds (b.removeFromRight (130).withSizeKeepingCentre (130, 52));
 
     renderBackground();
@@ -397,7 +509,7 @@ void MidiGenPanel::renderBackground()
                   Fonts::label (10.5f), juce::Justification::centredLeft, Col::dim.brighter (0.3f));
         lcdBox (g, lcdArea.toFloat());
     }
-    for (auto r : { controlArea, cardArea, bottomArea }) recess (g, r.toFloat(), 8.0f);
+    for (auto r : { controlArea, cardArea, toneArea, bottomArea }) recess (g, r.toFloat(), 8.0f);
 
     auto title = [&] (juce::Rectangle<int> a, const char* t, const char* sub)
     {
@@ -413,7 +525,24 @@ void MidiGenPanel::renderBackground()
     };
     title (controlArea, "STYLE", nullptr);
     knobLabel (similarity, "SIMILARITY"); knobLabel (color, "COLOR"); knobLabel (spice, "SPICE"); knobLabel (bassMotion, "BASS MOTION");
-    title (cardArea, "PROGRESSIONS", "click to swap in, drag into your DAW.  cyan = new chord");
+    title (cardArea, "IDEAS", "turn the dial, SAVE the ones you love, drag them into your DAW.  cyan = new chord");
+    title (toneArea, "SHAPE + TONE", "gate and length shape the MIDI too.  ADSR is for the built-in sound");
+    knobLabel (length, "LENGTH");
+    knobLabel (envA, "ATTACK"); knobLabel (envD, "DECAY"); knobLabel (envS, "SUSTAIN"); knobLabel (envR, "RELEASE");
+    knobLabel (hp, "HIGH PASS"); knobLabel (lp, "LOW PASS"); knobLabel (res, "RES");
+    knobLabel (mbLow, "LOW"); knobLabel (mbMid, "MID"); knobLabel (mbHigh, "HIGH"); knobLabel (squash, "SQUASH");
+    {
+        // group captions above the tone knobs
+        auto cap = [&] (const ui::Knob& a, const ui::Knob& z, const char* text)
+        {
+            auto r = juce::Rectangle<float> ((float) a.getX() - 6.0f, (float) a.getY() - 16.0f, (float) (z.getRight() - a.getX()) + 12.0f, 12.0f);
+            g.setColour (Col::dim.withAlpha (0.5f));
+            g.drawHorizontalLine ((int) r.getCentreY(), r.getX(), r.getRight());
+            engraved (g, text, r.withSizeKeepingCentre (juce::GlyphArrangement::getStringWidth (Fonts::label (10.5f), text) + 14.0f, 12.0f),
+                      Fonts::label (10.5f), juce::Justification::centred, Col::dim.brighter (0.35f));
+        };
+        cap (gate, length, "RHYTHM"); cap (envA, envR, "ENVELOPE"); cap (hp, res, "FILTER"); cap (mbLow, squash, "MULTIBAND");
+    }
     title (bottomArea, "SOUND", nullptr);
     knobLabel (vol, "VOL"); knobLabel (bpm, "TEMPO");
     lcdBox (g, instLcd.toFloat());
@@ -427,8 +556,31 @@ void MidiGenPanel::paint (juce::Graphics& g)
     g.setFont (Fonts::body (13.0f));
     g.setColour (Col::dim.brighter (0.35f));
     const int si = juce::jlimit (0, (int) hs::styleBlurbs().size() - 1, style.getSelectedItemIndex());
-    g.drawFittedText (juce::String (hs::styleBlurbs()[(size_t) si]), juce::Rectangle<int> (style.getX(), style.getBottom() + 4, 290, 34),
+    g.drawFittedText (juce::String (hs::styleBlurbs()[(size_t) si]), juce::Rectangle<int> (style.getX(), style.getBottom() + 4, style.getWidth(), 34),
                       juce::Justification::topLeft, 2);
+
+    // stepped knob names (FLAVOR, GATE) in amber under the knob
+    auto stepName = [&] (const ui::Knob& k, const juce::String& text)
+    {
+        glowText (g, text.toUpperCase(), k.getBounds().toFloat().withY ((float) k.getBottom() - 1.0f).withHeight (14.0f).expanded (34.0f, 0.0f),
+                  Fonts::label (11.5f), Col::amber, juce::Justification::centred);
+    };
+    {
+        const auto& fn = hs::flavorNames();
+        const auto& gn = hs::gateNames();
+        stepName (flavor, "FLAVOR: " + juce::String (fn[(size_t) juce::jlimit (0, (int) fn.size() - 1, (int) proc.apvts.getRawParameterValue ("flavor")->load())]));
+        stepName (gate, "GATE " + juce::String (gn[(size_t) juce::jlimit (0, (int) gn.size() - 1, (int) proc.apvts.getRawParameterValue ("gate")->load())]));
+    }
+    // IDEA readout under the big dial
+    {
+        lcdBox (g, ideaReadout.toFloat());
+        const bool live = proc.getSelected() == MidiGenProcessor::kDial;
+        g.setFont (Fonts::mono (10.5f));
+        g.setColour (Col::cyan.withAlpha (0.6f));
+        g.drawText (live ? "PLAYING" : "DIAL", ideaReadout.toFloat().reduced (10.0f, 3.0f), juce::Justification::topLeft);
+        glowText (g, "IDEA " + juce::String (proc.getIdea()) + " / " + juce::String (MidiGenProcessor::kIdeas), ideaReadout.toFloat().reduced (10.0f, 2.0f).withTrimmedTop (12.0f),
+                  Fonts::mono (17.0f), live ? Col::cyan : Col::cyan.withAlpha (0.55f), juce::Justification::centredLeft);
+    }
 
     // header LCD
     const auto lcd = lcdArea.toFloat().reduced (12.0f, 4.0f);
@@ -445,13 +597,20 @@ void MidiGenPanel::paint (juce::Graphics& g)
         if (sel < (int) vars.size())
         {
             for (auto& c : vars[(size_t) sel].chords) main << c.name << " ";
-            top << "  /  PLAYING " << (sel == 0 ? juce::String ("ORIGINAL") : juce::String (vars[(size_t) sel].label));
+            top << " / " << (sel == 0 ? juce::String ("ORIGINAL") : juce::String (vars[(size_t) sel].label));
         }
     }
     else main = "PRESS LISTEN";
+    if (proc.keysMode() && statusText.isEmpty() && proc.getListenState() == 0) top = "KEYS MODE: C3 D3 E3... PLAY THE CHORDS";
     g.setFont (Fonts::mono (11.0f));
     g.setColour (Col::cyan.withAlpha (0.6f));
     g.drawText (top, lcd.withHeight (14.0f), juce::Justification::centredLeft);
+    {
+        const bool synced = proc.isSyncedToHost();
+        const juce::String sync = (synced ? "DAW SYNC " : "FREE ") + juce::String ((int) std::round (proc.displayBpm.load())) + " BPM";
+        g.setColour (synced ? Col::green.withAlpha (0.85f) : Col::dim.brighter (0.2f));
+        g.drawText (sync, lcd.withHeight (14.0f), juce::Justification::centredRight);
+    }
     glowText (g, main.trim(), lcd.withTrimmedTop (14.0f), Fonts::mono (main.length() > 28 ? 13.0f : 17.0f), Col::cyan, juce::Justification::centredLeft);
 
     // instrument LCD
@@ -510,6 +669,20 @@ void MidiGenPanel::timerCallback()
     }
     if (statusTicks > 0 && --statusTicks == 0) statusText = {};
     repaint (lcdArea);
+    if (const int held = proc.keysMode() ? proc.heldChord() : -2; held != lastHeld)
+    {
+        lastHeld = held;
+        for (auto* c : cards) c->repaint();
+    }
+    // the step names and the idea number follow the knobs
+    static int lastF = -1, lastG = -1, lastI = -1, lastSel = -1;
+    const int f = (int) proc.apvts.getRawParameterValue ("flavor")->load(), gt = (int) proc.apvts.getRawParameterValue ("gate")->load();
+    if (f != lastF || gt != lastG || proc.getIdea() != lastI || sel != lastSel)
+    {
+        lastF = f; lastG = gt; lastI = proc.getIdea(); lastSel = sel;
+        repaint (flavor.getBounds().expanded (40, 20)); repaint (gate.getBounds().expanded (40, 20)); repaint (ideaReadout);
+        cards[MidiGenProcessor::kDial]->repaint();
+    }
 }
 
 // =============================================================================

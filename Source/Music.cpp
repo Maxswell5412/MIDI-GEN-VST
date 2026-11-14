@@ -82,20 +82,33 @@ const std::vector<int>& intervals (Q q)
         { 0, 4, 7, 10 }, { 0, 4, 7, 11 }, { 0, 3, 7, 10 }, { 0, 3, 6, 10 }, { 0, 3, 6, 9 },
         { 0, 4, 7, 14 }, { 0, 3, 7, 14 }, { 0, 4, 7, 9 }, { 0, 3, 7, 9 },
         { 0, 4, 7, 10, 14 }, { 0, 4, 7, 11, 14 }, { 0, 3, 7, 10, 14 }, { 0, 3, 7, 10, 14, 17 },
-        { 0, 4, 10, 14, 21 }, { 0, 5, 7, 10 }, { 0, 3, 7, 11 }, { 0, 7, 10, 14, 17 } };
+        { 0, 4, 10, 14, 21 }, { 0, 5, 7, 10 }, { 0, 3, 7, 11 }, { 0, 7, 10, 14, 17 },
+        { 0, 2, 7, 10 }, { 0, 4, 9, 14 }, { 0, 4, 10, 15 }, { 0, 4, 10, 13 }, { 0, 4, 11, 18 }, { 0, 2, 7, 11 } };
     return t[(int) q];
 }
 
 std::string qualitySuffix (Q q)
 {
     static const char* s[] = { "", "m", "dim", "aug", "sus2", "sus4", "7", "maj7", "m7", "m7b5", "dim7",
-                               "add9", "madd9", "6", "m6", "9", "maj9", "m9", "m11", "13", "7sus4", "m(maj7)", "11" };
+                               "add9", "madd9", "6", "m6", "9", "maj9", "m9", "m11", "13", "7sus4", "m(maj7)", "11",
+                               "7sus2", "6/9", "7#9", "7b9", "maj7#11", "maj7sus2" };
     return s[(int) q];
 }
 
-ParsedChord parseRoman (const std::string& token)
+ParsedChord parseRoman (const std::string& tokenIn)
 {
     ParsedChord pc;
+    std::string token = tokenIn;
+    int bassRel = -1;
+    if (const auto slash = tokenIn.find ('/'); slash != std::string::npos)
+    {
+        // slash chord: "i6/bIII" puts the bIII note in the bass
+        auto b = parseRoman (tokenIn.substr (slash + 1));
+        if (! b.ok) return pc;
+        bassRel = b.rootRel;
+        token = tokenIn.substr (0, slash);
+    }
+    pc.bassRel = bassRel;
     size_t i = 0;
     if (i < token.size() && token[i] == 'b') { pc.accidental = -1; ++i; }
     else if (i < token.size() && token[i] == '#') { pc.accidental = 1; ++i; }
@@ -124,6 +137,12 @@ ParsedChord parseRoman (const std::string& token)
     else if (suf == "m7b5")      pc.q = Q::HalfDim;
     else if (suf == "+")         pc.q = Q::Aug;
     else if (suf == "7sus4")     pc.q = Q::Sus7;
+    else if (suf == "7sus2")     pc.q = Q::Sus2_7;
+    else if (suf == "maj7sus2")  pc.q = Q::Maj7Sus2;
+    else if (suf == "69")        pc.q = Q::SixNine;
+    else if (suf == "7#9")       pc.q = Q::Dom7s9;
+    else if (suf == "7b9")       pc.q = Q::Dom7b9;
+    else if (suf == "maj7#11")   pc.q = Q::Maj7s11;
     else if (suf == "sus2")      pc.q = Q::Sus2;
     else if (suf == "sus4")      pc.q = Q::Sus4;
     else if (suf == "maj9")      pc.q = Q::Maj9;
@@ -248,7 +267,7 @@ double mean (const std::vector<int>& v)
 } // namespace
 
 std::vector<int> voiceChord (int rootPc, const std::vector<int>& ivs, int genre,
-                             const std::vector<int>& prev, int centre)
+                             const std::vector<int>& prev, int centre, bool wide, int bassPc)
 {
     const auto style = genreAt (genre).voicing;
 
@@ -259,7 +278,9 @@ std::vector<int> voiceChord (int rootPc, const std::vector<int>& ivs, int genre,
         const int pc = wrap12 (rootPc + iv);
         if (std::find (pcs.begin(), pcs.end(), pc) == pcs.end()) pcs.push_back (pc);
     }
-    if (pcs.size() >= 5)
+    // wide "melodic" voicings play shells: no 5th on 7th chords (root, 3rd, 7th, colour on top)
+    const bool hasSeventh = std::find (ivs.begin(), ivs.end(), 10) != ivs.end() || std::find (ivs.begin(), ivs.end(), 11) != ivs.end();
+    if (pcs.size() >= 5 || (wide && hasSeventh && pcs.size() >= 4))
     {
         const int fifth = wrap12 (rootPc + 7);
         auto it = std::find (pcs.begin(), pcs.end(), fifth);
@@ -315,6 +336,23 @@ std::vector<int> voiceChord (int rootPc, const std::vector<int>& ivs, int genre,
             {
                 candidates.push_back (close);
             }
+
+            if (wide && close.size() >= 3)
+            {
+                // "Melodic chords": a low bass note, then a spread upper structure an octave and more above it
+                const int bpc = bassPc >= 0 ? bassPc : rootPc;
+                std::vector<int> upper;
+                for (int x : close) if (wrap12 (x) != bpc || close.size() <= 3) upper.push_back (x);
+                if (upper.size() >= 4) { upper[upper.size() - 2] -= 12; std::sort (upper.begin(), upper.end()); }   // drop-2 spread
+                if (upper.size() == 3 && wrap12 (upper.front()) != wrap12 (upper.back())) upper.push_back (upper[1] + 12);
+                int bass = bpc + 12 * 3;
+                while (bass > upper.front() - 10) bass -= 12;
+                while (bass < 34) bass += 12;
+                std::vector<int> v { bass };
+                v.insert (v.end(), upper.begin(), upper.end());
+                std::sort (v.begin(), v.end());
+                if (v.back() - v.front() >= 19) candidates.push_back (v);
+            }
         }
     }
 
@@ -322,10 +360,14 @@ std::vector<int> voiceChord (int rootPc, const std::vector<int>& ivs, int genre,
     double bestCost = 1e9;
     for (auto& c : candidates)
     {
-        if (c.front() < centre - 26 || c.back() > centre + 22) continue;
+        if (c.front() < (wide ? 33 : centre - 26) || c.back() > centre + 22) continue;
+        const bool isWide = wide && c.back() - c.front() >= 19;
         double cost = 0.35 * std::abs (mean (c) - (double) centre) * (prev.empty() ? 3.0 : 1.0);
         cost += movement (prev, c);
-        cost += 0.15 * (double) std::max (0, (c.back() - c.front()) - (style == Voicing::Spread ? 26 : 14));
+        cost += 0.15 * (double) std::max (0, (c.back() - c.front()) - (style == Voicing::Spread || isWide ? 30 : 14));
+        if (wide && ! isWide) cost += 6.0;                                   // wide voicings win when asked for
+        if (! prev.empty()) cost += 0.7 * std::abs (c.back() - prev.back()); // keep the top note singing (often the same note)
+        if (! prev.empty() && c.back() == prev.back()) cost -= 1.5;
         if (cost < bestCost) { bestCost = cost; best = c; }
     }
     if (best.empty() && ! candidates.empty()) best = candidates.front();
@@ -343,6 +385,7 @@ struct SlotChord
     Q q;
     std::string roman;
     int accidental;
+    int bassRel = -1;
 };
 
 struct Ctx
@@ -590,14 +633,17 @@ void buildHarmony (Ctx& c)
     const double chordLen = c.length / (double) slots;
 
     // Parse + colour each token once, so repeats sound the same
+    const float richness = std::clamp (s.complexity + 0.35f * s.spice, 0.0f, 1.0f);
     std::vector<SlotChord> base;
     for (int i = 0; i < n; ++i)
     {
         auto pc = parseRoman (tokens[(size_t) i]);
         if (! pc.ok) pc = parseRoman (c.minor ? "i" : "I");
         Rng er (seedFor (s.harmonySeed, 41, (uint64_t) i * 131u + (uint64_t) pc.rootRel, (uint64_t) s.genre));
-        const Q q = pc.explicitQ ? pc.q : extend (pc.q, pc.rootRel, g.extensions, s.complexity, er);
-        base.push_back ({ pc.rootRel, q, tokens[(size_t) i], pc.accidental });
+        const Q q = pc.explicitQ ? pc.q : extend (pc.q, pc.rootRel, g.extensions, richness, er);
+        SlotChord sc { pc.rootRel, q, tokens[(size_t) i], pc.accidental };
+        sc.bassRel = pc.bassRel;
+        base.push_back (sc);
     }
 
     std::vector<SlotChord> seq;
@@ -614,7 +660,7 @@ void buildHarmony (Ctx& c)
                 if (substitute (sc.rootRel, sc.q, nr, nq))
                 {
                     Rng er (seedFor (s.harmonySeed, 43, (uint64_t) nr));
-                    sc = { nr, extend (nq, nr, g.extensions, s.complexity, er), romanFor (nr, nq), nr == 8 || nr == 10 || nr == 3 ? -1 : 0 };
+                    sc = { nr, extend (nq, nr, g.extensions, richness, er), romanFor (nr, nq), nr == 8 || nr == 10 || nr == 3 ? -1 : 0 };
                 }
             }
             seq.push_back (sc);
@@ -627,28 +673,95 @@ void buildHarmony (Ctx& c)
         if (last.rootRel != 7 && last.rootRel != 10 && last.rootRel != 8)
         {
             Rng er (seedFor (s.harmonySeed, 47));
-            last = { 7, extend (Q::Maj, 7, g.extensions, s.complexity, er), "V", 0 };
+            last = { 7, extend (Q::Maj, 7, g.extensions, richness, er), "V", 0 };
         }
     }
     if (s.section == Outro && last.rootRel != 0)
     {
         Rng er (seedFor (s.harmonySeed, 53));
         const Q tq = c.minor ? Q::Min : Q::Maj;
-        last = { 0, extend (tq, 0, g.extensions, s.complexity, er), c.minor ? "i" : "I", 0 };
+        last = { 0, extend (tq, 0, g.extensions, richness, er), c.minor ? "i" : "I", 0 };
+    }
+
+    // Timed chords (even to begin with)
+    struct Timed { double start, len; SlotChord sc; bool spice; };
+    std::vector<Timed> timed;
+    for (int i = 0; i < (int) seq.size(); ++i) timed.push_back ({ i * chordLen, chordLen, seq[(size_t) i], false });
+
+    // ---- SPICE: passing chords, pushes and sus resolves, like a session keys player
+    if (s.spice > 0.01f && s.imported == nullptr)
+    {
+        Rng sr (seedFor (s.harmonySeed, 59, (uint64_t) sectionGroup (s.section), (uint64_t) s.genre));
+        const double sp = s.spice;
+        auto dom = [&] (double extra) { return sp > 0.7 && sr.chance (0.5 + extra) ? (sr.chance (0.5) ? Q::Dom9 : Q::Dom7b9) : Q::Dom7; };
+        std::vector<Timed> out;
+        for (size_t i = 0; i < timed.size(); ++i)
+        {
+            Timed cur = timed[i];
+            const bool hasNext = i + 1 < timed.size() || reps > 0;
+            const Timed& nxt = timed[(i + 1) % timed.size()];
+            const bool change = nxt.sc.rootRel != cur.sc.rootRel || nxt.sc.q != cur.sc.q;
+            // sus4 that resolves, on a dominant
+            if (cur.sc.rootRel == 7 && cur.len >= 2.0 && sr.chance (0.25 + 0.4 * sp) && cur.sc.q != Q::Sus4 && cur.sc.q != Q::Sus7)
+            {
+                Timed sus = cur; sus.len = cur.len * 0.5; sus.sc.q = Q::Sus7; sus.spice = true; sus.sc.bassRel = -1;
+                cur.start += sus.len; cur.len -= sus.len; cur.spice = true;
+                out.push_back (sus);
+            }
+            // approach chord on the last beat before a change
+            if (hasNext && change && cur.len >= 2.0 && sr.chance (0.55 * sp))
+            {
+                const int target = nxt.sc.rootRel;
+                Timed ap = cur;
+                ap.len = cur.len >= 4.0 && sr.chance (0.5) ? 1.0 : (cur.len >= 4.0 ? 2.0 : 1.0);
+                ap.start = cur.start + cur.len - ap.len;
+                ap.spice = true; ap.sc.bassRel = -1;
+                const double roll = sr.uni();
+                if (roll < 0.4)                        // secondary dominant: V7 of the next chord
+                { ap.sc.rootRel = wrap12 (target + 7); ap.sc.q = dom (0.0); ap.sc.accidental = 0; ap.sc.roman = "V7/"; }
+                else if (roll < 0.62 && sp > 0.35)     // tritone sub: bII7 of the next chord
+                { ap.sc.rootRel = wrap12 (target + 1); ap.sc.q = sp > 0.6 ? Q::Dom9 : Q::Dom7; ap.sc.accidental = -1; ap.sc.roman = "subV7/"; }
+                else if (roll < 0.8 && wrap12 (target - cur.sc.rootRel) == 2)   // passing diminished between roots a step apart
+                { ap.sc.rootRel = wrap12 (target - 1); ap.sc.q = Q::Dim7; ap.sc.accidental = 1; ap.sc.roman = "#dim7"; }
+                else                                   // chromatic slide from a half step above, same colour as the target
+                { ap.sc.rootRel = wrap12 (target + 1); ap.sc.q = nxt.sc.q; ap.sc.accidental = -1; ap.sc.roman = "slide"; }
+                cur.len -= ap.len;
+                out.push_back (cur);
+                out.push_back (ap);
+                continue;
+            }
+            out.push_back (cur);
+        }
+        // pushes: the change lands an eighth early
+        for (size_t i = 1; i < out.size(); ++i)
+            if (out[i - 1].len >= 1.5 && sr.chance (0.4 * sp))
+            {
+                out[i - 1].len -= 0.5; out[i].start -= 0.5; out[i].len += 0.5; out[i].spice = true;
+            }
+        timed.swap (out);
     }
 
     // Voice everything with smooth voice leading
     std::vector<int> prev;
-    for (int i = 0; i < (int) seq.size(); ++i)
+    for (const auto& tc : timed)
     {
-        const auto& sc = seq[(size_t) i];
+        const auto& sc = tc.sc;
         ChordSpan span;
-        span.start = i * chordLen;
-        span.len = chordLen;
+        span.start = tc.start;
+        span.len = tc.len;
+        span.spice = tc.spice;
         span.rootPc = wrap12 (c.keyPc + sc.rootRel);
         span.roman = sc.roman;
         span.name = chordName (span.rootPc, sc.q, c.keyPc, c.minor, sc.accidental);
-        span.notes = voiceChord (span.rootPc, intervals (sc.q), s.genre, prev, 62);
+        if (sc.bassRel >= 0)
+        {
+            span.bassPc = wrap12 (c.keyPc + sc.bassRel);
+            if (span.bassPc != span.rootPc)
+                span.name += "/" + noteName (span.bassPc, keyPrefersFlats (c.keyPc, c.minor) || sc.bassRel == 3 || sc.bassRel == 8 || sc.bassRel == 10);
+            else span.bassPc = -1;
+        }
+        const bool wide = s.spice >= 0.3f && s.genre != 3;   // classical keeps close voicings
+        span.notes = voiceChord (span.rootPc, intervals (sc.q), s.genre, prev, 62, wide, span.bassPc);
         prev = span.notes;
 
         std::vector<int> pcs;
@@ -734,6 +847,13 @@ void buildChordRhythm (Ctx& c)
         const int here = c.chordIndexAt (t);
         const bool chordStarts = std::abs (chords[(size_t) here].start - t) < 1.0e-6;
         const int vel = (st % 4 == 0) ? 98 : 86;
+        if (chordStarts && chords[(size_t) here].spice && activeChord != here)
+        {
+            // passing and pushed chords always sound, whatever the rhythm pattern
+            close (t);
+            open (t, here, 92);
+            continue;
+        }
 
         if (ch == 'x')
         {
@@ -765,104 +885,167 @@ void buildChordRhythm (Ctx& c)
 }
 
 // ---------------------------------------------------------------- melody
-struct MotifNote { double t, len; int off; bool strong; };
+// Hooks are built the way writers build them: a rhythm you can clap, a shape that rises and falls,
+// a phrase that asks and a phrase that answers, strong beats on chord tones, pentatonic in between,
+// and (in soul styles) a little run into the last note.
+struct MotifNote { double t, len; int off; bool strong; bool run = false; };
+
+// one-bar rhythm cells: x = new note, - = hold, . = rest (16 steps)
+struct Cell { const char* steps; int family; };   // family: 0 lyrical, 1 pop hook, 2 syncopated R&B, 3 busy/rap, 4 dance stab
+static const Cell kCells[] = {
+    { "x-------x---x---", 0 }, { "x---x---x-------", 0 }, { "....x---x---x---", 0 }, { "x-----x---x-----", 0 },
+    { "x---x-x-x-------", 0 }, { "..x-x---x-------", 0 },
+    { "x--x--x---x-----", 1 }, { "x-x-x---x-x-----", 1 }, { "..x-x-x---x-----", 1 }, { "x--x--x-x-------", 1 },
+    { "x-x-x-x-x---....", 1 }, { "....x-x-x--x----", 1 },
+    { "..x..x..x-------", 2 }, { "x.xx..x...x-----", 2 }, { "...x..x..x..x---", 2 }, { "x..x.x..x.x.....", 2 },
+    { "..xx..x-x-------", 2 }, { ".x..x..x..x-----", 2 },
+    { "x.xx.x.x.xx.x...", 3 }, { "x.xxx.x.x.xxx...", 3 }, { ".xx.x.x..xx.x...", 3 }, { "xx.x.xx.x.x.....", 3 },
+    { "x...x...x.x.....", 4 }, { "..x...x...x.x...", 4 }, { "x.x...x.x.x.....", 4 }, { "..x.x...x.x.x...", 4 },
+};
+// phrase endings: land and breathe
+static const char* kEndCells[] = { "x-------........", "x---x-----------", "x-x-x-----------", "..x-x-------....",
+                                   "x--x--x---------", "..x---x---------" };
+
+// how pentatonic the hooks are, and how often a soul run leads into the last note
+static float pentaBias (int genre)
+{
+    static const float b[] = { 0.5f, 0.5f, 0.6f, 0.0f, 0.2f, 0.5f, 0.5f, 0.3f, 0.75f, 0.7f, 0.6f, 0.7f, 0.6f, 0.6f, 0.7f, 0.8f, 0.6f, 0.8f };
+    return b[std::clamp (genre, 0, 17)];
+}
+static float runChance (int genre)
+{
+    static const float b[] = { 0.15f, 0.08f, 0.05f, 0.1f, 0.05f, 0.06f, 0.1f, 0.05f, 0.1f, 0.08f, 0.05f, 0.45f, 0.4f, 0.2f, 0.55f, 0.15f, 0.12f, 0.2f };
+    return b[std::clamp (genre, 0, 17)];
+}
+
+static int cellNotes (const char* c) { int n = 0; for (int i = 0; i < 16; ++i) n += c[i] == 'x'; return n; }
+
+static std::vector<int> preferredFamilies (const Melody& m, int genre)
+{
+    // dance genres like stabs, rap-adjacent genres like busy cells, soul likes syncopation
+    if (genre == 5 || genre == 6 || genre == 7 || genre == 1) return { 4, 1, 2 };
+    if (genre == 8 || genre == 9 || genre == 10) return { 3, 2, 1 };
+    if (genre == 11 || genre == 12 || genre == 14 || genre == 13) return { 2, 0, 1 };
+    if (genre == 3 || genre == 4) return { 0, 1 };
+    if (genre == 15 || genre == 16) return { 2, 4, 1 };
+    if (genre == 17) return { 1, 0, 2 };   // country: straight, singable
+    return m.syncopation > 0.5f ? std::vector<int> { 2, 1, 0 } : std::vector<int> { 1, 0, 2 };
+}
+
+static const char* pickCell (Ctx& c, Rng& r, bool ending)
+{
+    if (ending) return kEndCells[r.range (0, (int) (sizeof (kEndCells) / sizeof (kEndCells[0])) - 1)];
+    const auto fams = preferredFamilies (c.g.melody, c.s.genre);
+    const double want = std::clamp (c.g.melody.notesPerBar * (0.55 + c.s.density * 0.9) * (0.7 + 0.4 * c.energy), 2.0, 9.0);
+    std::vector<double> w; std::vector<const char*> pool;
+    for (auto& cell : kCells)
+    {
+        double fw = 0.15;
+        for (size_t k = 0; k < fams.size(); ++k) if (fams[k] == cell.family) fw = 1.0 / (1.0 + (double) k * 0.8);
+        if (cell.family == 3 && ! c.g.melody.sixteenths) fw *= 0.2;
+        const double d = std::abs (cellNotes (cell.steps) - want);
+        w.push_back (fw * std::exp (-d * 0.55));
+        pool.push_back (cell.steps);
+    }
+    double tot = 0; for (double x : w) tot += x;
+    double pick = r.uni() * tot;
+    for (size_t i = 0; i < w.size(); ++i) { if (pick < w[i]) return pool[i]; pick -= w[i]; }
+    return pool.back();
+}
+
+// Contours: the shape the phrase traces, as scale steps across the phrase (0..1 -> step)
+static double contourAt (int shape, double x)
+{
+    switch (shape)
+    {
+        case 0:  return 4.0 * std::sin (x * 3.14159);                     // arch
+        case 1:  return 5.0 - 5.0 * x;                                     // fall (soul)
+        case 2:  return 1.0 + 4.0 * x - 2.0 * x * x;                       // rise and settle
+        case 3:  return 2.0 + 2.0 * std::sin (x * 6.283);                  // wave
+        default: return x < 0.5 ? 3.0 : 3.0 - 6.0 * (x - 0.5);             // hold high, then fall
+    }
+}
 
 std::vector<MotifNote> makeMotif (Ctx& c, Rng& r, int bars)
 {
-    const auto& m = c.g.melody;
-    const int S = 16 * bars;
-    const double target = m.notesPerBar * bars * (0.45 + c.s.density * 1.1) * (0.65 + 0.45 * c.energy);
-    const int N = std::clamp ((int) std::lround (target), 2, (int) (S * 0.7));
-
-    std::vector<double> w ((size_t) S, 0.0);
-    for (int s = 0; s < S; ++s)
+    // rhythm from cells: bar 1 a hook cell, the last bar lands
+    std::string grid;
+    const char* hook = pickCell (c, r, false);
+    for (int b = 0; b < bars; ++b)
     {
-        double x;
-        if (s % 16 == 0)      x = 1.3;
-        else if (s % 4 == 0)  x = 1.0;
-        else if (s % 2 == 0)  x = 0.45 + 0.5 * m.syncopation;
-        else                  x = m.sixteenths ? 0.08 + 0.45 * m.syncopation * (0.5 + c.s.complexity) : 0.0;
-        if (s >= S - 4) x *= 0.3;   // breathe at the end of the phrase
-        w[(size_t) s] = x;
+        const bool last = b == bars - 1 && bars > 1;
+        const char* cell = (b == 0 || r.chance (0.45)) ? hook : pickCell (c, r, false);
+        if (last) cell = r.chance (0.6) ? pickCell (c, r, true) : hook;
+        grid += cell;
     }
-    w[0] *= r.chance (0.75) ? 2.5 : 0.15;   // sometimes start with a pickup instead of on the one
-
-    std::vector<double> onsets;
-    for (int i = 0; i < N; ++i)
+    // triplet flavour: swap one busy beat for a triplet
+    std::vector<double> onsets, lens;
+    const int S = (int) grid.size();
+    for (int st = 0; st < S; ++st)
     {
-        double tot = 0; for (double x : w) tot += x;
-        if (tot <= 0) break;
-        double pick = r.uni() * tot;
-        for (int s = 0; s < S; ++s)
-        {
-            if (pick < w[(size_t) s]) { onsets.push_back (s * 0.25); w[(size_t) s] = 0; break; }
-            pick -= w[(size_t) s];
-        }
+        if (grid[(size_t) st] != 'x') continue;
+        int e = st + 1;
+        while (e < S && grid[(size_t) e] == '-') ++e;
+        onsets.push_back (st * 0.25);
+        lens.push_back ((e - st) * 0.25);
     }
-    std::sort (onsets.begin(), onsets.end());
-
-    // Triplet figures replace a beat here and there
-    if (m.triplets > 0.0f)
+    if (onsets.empty()) { onsets.push_back (0.0); lens.push_back (1.0); }
+    if (c.g.melody.triplets > 0.0f && r.chance (c.g.melody.triplets * (0.4 + c.s.complexity)))
     {
-        std::vector<double> out;
-        std::set<int> tripBeats;
-        for (int b = 0; b < bars * 4 - 1; ++b)
-            if (r.chance (m.triplets * (0.35 + c.s.complexity * 0.8)))
-            {
-                bool has = false;
-                for (double t : onsets) if (t >= b && t < b + 1) has = true;
-                if (has) tripBeats.insert (b);
-            }
-        for (double t : onsets) if (! tripBeats.count ((int) std::floor (t))) out.push_back (t);
-        for (int b : tripBeats) for (int k = 0; k < 3; ++k) out.push_back (b + k / 3.0);
-        std::sort (out.begin(), out.end());
-        onsets.swap (out);
+        const int beat = r.range (0, std::max (0, bars * 4 - 2));
+        std::vector<double> o2, l2;
+        for (size_t i = 0; i < onsets.size(); ++i)
+            if (onsets[i] < beat || onsets[i] >= beat + 1) { o2.push_back (onsets[i]); l2.push_back (lens[i]); }
+        for (int k = 0; k < 3; ++k) { o2.push_back (beat + k / 3.0); l2.push_back (1.0 / 3.0); }
+        std::vector<size_t> idx (o2.size());
+        for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
+        std::sort (idx.begin(), idx.end(), [&] (size_t a, size_t b) { return o2[a] < o2[b]; });
+        onsets.clear(); lens.clear();
+        for (auto i : idx) { onsets.push_back (o2[i]); lens.push_back (l2[i]); }
     }
-    if (onsets.empty()) onsets.push_back (0.0);
 
+    // pitch shape
+    const int shape = r.range (0, 4);
+    const double lift = r.uni() * 2.0 - 0.5;
     std::vector<MotifNote> mot;
-    int off = 0, dir = r.chance (0.5) ? 1 : -1;
-    bool afterLeap = false;
+    int prevOff = 0;
     for (size_t i = 0; i < onsets.size(); ++i)
     {
-        const double t = onsets[i];
-        const double next = i + 1 < onsets.size() ? onsets[i + 1] : bars * 4.0;
-        const double gap = next - t;
-        double len = r.chance (m.legato) ? gap * 0.95 : gap * (0.45 + 0.4 * r.uni());
-        if (gap > 2.0 && ! r.chance (m.legato)) len = std::min (len, 1.0 + r.uni());
-        if (i + 1 == onsets.size()) len = std::min (gap * 0.95, 2.5);
-        len = std::max (len, 0.1);
-
+        const double x = onsets.size() > 1 ? (double) i / (double) (onsets.size() - 1) : 0.0;
+        int off = (int) std::lround (contourAt (shape, x) + lift);
+        // keep it singable: no more than a 4th between neighbours, and repeat notes now and then
         if (i > 0)
         {
-            int delta;
-            if (afterLeap)              { delta = -dir; afterLeap = false; }
-            else if (r.chance (m.repeat)) delta = 0;
-            else if (r.chance (m.leap))   { delta = dir * r.range (2, 4); afterLeap = true; }
-            else                          delta = dir * (r.chance (0.75) ? 1 : 2);
-
-            if (r.chance (0.3)) dir = -dir;
-            off += delta;
-            if (off > 8)  { off = 8 - 1;  dir = -1; }
-            if (off < -6) { off = -6 + 1; dir = 1; }
-            if (delta != 0 && r.chance (0.35)) dir = delta > 0 ? 1 : -1;
+            if (r.chance (c.g.melody.repeat * 0.8)) off = prevOff;
+            off = std::clamp (off, prevOff - 3, prevOff + 3);
+            if (r.chance (c.g.melody.leap * 0.5)) off = prevOff + (r.chance (0.5) ? 3 : -3);
         }
-        const bool strong = std::abs (t - std::round (t)) < 1.0e-6;
-        mot.push_back ({ t, len, off, strong });
+        off = std::clamp (off, -5, 8);
+        double len = lens[i];
+        if (! r.chance (c.g.melody.legato)) len = std::max (0.12, len * (0.5 + 0.3 * r.uni()));
+        else len *= 0.95;
+        const bool strong = std::abs (onsets[i] - std::round (onsets[i])) < 1.0e-6;
+        mot.push_back ({ onsets[i], len, off, strong });
+        prevOff = off;
     }
     return mot;
 }
 
+// The answer: same rhythm and opening, but the end comes home (or reaches up, for a "call")
 std::vector<MotifNote> varyMotif (const std::vector<MotifNote>& a, Rng& r)
 {
     auto v = a;
-    const size_t from = v.size() - std::max<size_t> (1, (v.size() + 2) / 3);
-    int off = from > 0 ? v[from - 1].off : 0;
+    if (v.empty()) return v;
+    const size_t from = v.size() - std::max<size_t> (1, (v.size() + 1) / 3);
+    const int endOff = r.chance (0.7) ? 0 : 2;          // tonic, or the 3rd
+    const int startOff = from > 0 ? v[from - 1].off : v.front().off;
     for (size_t i = from; i < v.size(); ++i)
     {
-        off += r.range (-2, 2);
-        v[i].off = std::clamp (off, -6, 8);
+        const double k = (double) (i - from + 1) / (double) (v.size() - from);
+        v[i].off = (int) std::lround (startOff + (endOff - startOff) * k);
     }
+    // sometimes the answer changes its last rhythm too
+    if (v.size() > 3 && r.chance (0.35)) v.pop_back();
     return v;
 }
 
@@ -873,8 +1056,9 @@ void buildMelody (Ctx& c)
     const int group = sectionGroup (section);
 
     const bool hookLike = group == 0 || section == PreChorus;
-    const int letterBars = hookLike ? 1 : 2;
+    const int letterBars = c.s.bars >= 2 ? 2 : 1;          // 2-bar phrases: a call and an answer
     const int L = std::max (1, c.s.bars / letterBars);
+    (void) hookLike;
 
     // Register, relative to the tonic
     int targetOff = 7, lo = 0, hi = 17;
@@ -890,9 +1074,9 @@ void buildMelody (Ctx& c)
         auto it = motifs.find (letter);
         if (it != motifs.end()) return it->second;
         Rng r (seedFor (c.s.melodySeed, 71, (uint64_t) group * 17u + (uint64_t) (unsigned char) letter, (uint64_t) c.s.genre));
-        if (letter == 'a')
+        if (letter == 'a' || letter == 'b')
         {
-            auto base = motif ('A');
+            auto base = motif ((char) std::toupper ((unsigned char) letter));
             return motifs[letter] = varyMotif (base, r);
         }
         return motifs[letter] = makeMotif (c, r, letterBars);
@@ -902,13 +1086,15 @@ void buildMelody (Ctx& c)
     for (int i = 0; i < L; ++i)
     {
         if (L == 1) { form.push_back ('A'); continue; }
-        if (L == 2) { form.push_back (i == 0 ? 'A' : 'B'); continue; }
+        if (L == 2) { form.push_back (i == 0 ? 'A' : 'a'); continue; }          // call, answer
         const int pos = i % 4;
         const bool lastGroup = (i / 4) == (L - 1) / 4;
         if (section == Bridge)
             form.push_back (pos == 0 ? 'D' : pos == 1 ? 'd' : pos == 2 ? 'E' : 'F');
+        else if (section == Verse)
+            form.push_back (pos == 0 ? 'A' : pos == 1 ? 'a' : pos == 2 ? 'B' : 'b');
         else
-            form.push_back (pos == 0 ? 'A' : pos == 1 ? 'a' : pos == 2 ? 'A' : (lastGroup ? 'C' : 'B'));
+            form.push_back (pos == 0 ? 'A' : pos == 1 ? 'a' : pos == 2 ? 'A' : (lastGroup ? 'C' : 'a'));
     }
     // 'd' is a variation of D
     if (section == Bridge)
@@ -965,6 +1151,22 @@ void buildMelody (Ctx& c)
                 else if (c.inChord (up, ci)) p = up;
                 else if (c.inChord (c.pitchOfStep (step - 2), ci)) p = c.pitchOfStep (step - 2);
                 else if (c.inChord (c.pitchOfStep (step + 2), ci)) p = c.pitchOfStep (step + 2);
+                // passing / chromatic chords: take the nearest chord tone, even if it's outside the key
+                if (! c.inChord (p, ci))
+                    for (int d : { -1, 1, -2, 2 })
+                        if (c.inChord (p + d, ci)) { p += d; break; }
+            }
+            // Weak beats lean pentatonic (no 4th / 7th in major, no 2nd / 6th in minor): that's the hooky sound
+            if (! mn.strong && ! c.inChord (p, ci))
+            {
+                Rng pr (seedFor (c.s.melodySeed, 83, (uint64_t) std::llround (t * 64.0)));
+                const int rel = wrap12 (p - c.keyPc);
+                const bool avoid = c.minor ? (rel == 2 || rel == 8 || rel == 9) : (rel == 5 || rel == 11);
+                if (avoid && pr.chance (pentaBias (c.s.genre)))
+                {
+                    const int dn = c.pitchOfStep (step - 1), up = c.pitchOfStep (step + 1);
+                    p = std::abs (dn - prevPitch) <= std::abs (up - prevPitch) ? dn : up;
+                }
             }
             // Borrowed chords: bend the scale note onto the chord's own note
             if (! c.inChord (p, ci))
@@ -994,6 +1196,40 @@ void buildMelody (Ctx& c)
             if (wrap12 (p) == want && std::abs (p - lastN.pitch) < bestD) { bestD = std::abs (p - lastN.pitch); best = p; }
         lastN.pitch = best;
         lastN.len = std::max (lastN.len, std::min (2.0, c.length - lastN.start));
+    }
+
+    // Soul runs: a quick pentatonic run that falls into the last note of a phrase
+    if (! out.empty() && runChance (c.s.genre) > 0.0f)
+    {
+        std::sort (out.begin(), out.end(), [] (const NoteEv& a, const NoteEv& b) { return a.start < b.start; });
+        Rng rr (seedFor (c.s.melodySeed, 89, (uint64_t) group, (uint64_t) c.s.genre));
+        const double p = runChance (c.s.genre) * (0.6 + 0.8 * c.s.complexity);
+        const int penta[2][5] = { { 0, 2, 4, 7, 9 }, { 0, 3, 5, 7, 10 } };
+        std::vector<NoteEv> add;
+        for (size_t i = 1; i < out.size(); ++i)
+        {
+            const auto& n = out[i];
+            const bool phraseEnd = (i + 1 == out.size()) || out[i + 1].start - (n.start + n.len) > 0.6;
+            if (! phraseEnd || n.len < 0.7) continue;
+            const double room = n.start - (out[i - 1].start + std::min (out[i - 1].len, 0.25));
+            if (room < 0.55 || ! rr.chance (p)) continue;
+            const int count = rr.chance (0.5) ? 4 : 3;
+            const double step = rr.chance (0.6) ? 0.125 : 1.0 / 6.0;
+            // pentatonic notes above the target, walking down into it
+            std::vector<int> tones;
+            for (int q = n.pitch + 1; q <= std::min (n.pitch + 14, 88) && (int) tones.size() < count; ++q)
+            {
+                const int rel = wrap12 (q - c.keyPc);
+                for (int pt : penta[c.minor ? 1 : 0]) if (rel == pt) { tones.push_back (q); break; }
+            }
+            if ((int) tones.size() < count) continue;
+            for (int k = 0; k < count; ++k)
+            {
+                const int q = tones[(size_t) (count - 1 - k)];
+                add.push_back ({ n.start - step * (count - k), step * 0.9, q, 72 + k * 4 });
+            }
+        }
+        for (auto& e : add) if (e.start >= 0) out.push_back (e);
     }
 
     humanise (c, out, 79, true, c.s.melodySeed);
@@ -1107,6 +1343,57 @@ void mutateDrums (BarLines& b, Rng& r, const Genre& g, float complexity, float d
     }
 }
 
+
+// Each new drum idea gets its own hat and kick character, so new ideas really sound new.
+void restyleDrums (BarLines& a, BarLines& b, Rng& r, const Genre& g)
+{
+    auto setHats = [&] (BarLines& bar, int style)
+    {
+        if (bar.hat.size() != 16) return;
+        std::string h (16, '.');
+        for (int st = 0; st < 16; ++st)
+        {
+            switch (style)
+            {
+                case 0: h[(size_t) st] = st % 2 == 0 ? 'x' : '.'; break;                              // 8ths
+                case 1: h[(size_t) st] = st % 2 == 0 ? 'x' : 'g'; break;                              // 16ths
+                case 2: h[(size_t) st] = st % 4 == 2 ? 'x' : '.'; break;                              // offbeat "and"s
+                case 3: h[(size_t) st] = st % 4 == 0 ? 'x' : (st % 4 == 3 ? 'g' : '.'); break;        // quarters + pickups
+                default: h[(size_t) st] = (st % 8 == 0 || st % 8 == 3 || st % 8 == 6) ? 'x' : '.'; break;   // 3-3-2 bounce
+            }
+        }
+        bar.hat = h;
+    };
+    const int hatStyle = g.hatRolls ? r.range (0, 1) : r.range (0, 4);
+    if (r.chance (0.85)) { setHats (a, hatStyle); setHats (b, hatStyle); }
+    if (r.chance (0.5) && a.hat.size() == 16 && ! g.hatRolls)
+    {
+        a.openHat = b.openHat = std::string (16, '.');
+        const int st = r.chance (0.5) ? 6 : 14;
+        a.openHat[(size_t) st] = b.openHat[(size_t) st] = 'x';
+        a.hat[(size_t) st] = b.hat[(size_t) st] = '.';
+    }
+    // kick: a new syncopation for this idea (backbeats stay where they are)
+    auto kickVariant = [&] (BarLines& bar)
+    {
+        if (bar.kick.size() != 16) return;
+        const bool fourOnFloor = isHit (bar.kick[0]) && isHit (bar.kick[4]) && isHit (bar.kick[8]) && isHit (bar.kick[12]);
+        if (fourOnFloor) return;
+        for (int st = 1; st < 16; ++st)
+            if (bar.kick[(size_t) st] == 'x' && st % 4 != 0 && r.chance (0.5)) bar.kick[(size_t) st] = '.';
+        for (int k = 0; k < r.range (1, 3); ++k)
+        {
+            static const int spots[] = { 3, 6, 7, 10, 11, 14, 15 };
+            const int st = spots[r.range (0, 6)];
+            const bool back = (bar.snare.size() == 16 && isHit (bar.snare[(size_t) st])) || (bar.clap.size() == 16 && isHit (bar.clap[(size_t) st]));
+            if (! back) bar.kick[(size_t) st] = 'x';
+        }
+    };
+    kickVariant (a);
+    b.kick = a.kick;
+    if (r.chance (0.5)) kickVariant (b);
+}
+
 void buildDrums (Ctx& c)
 {
     auto& out = c.p->lanes[DrumsLane];
@@ -1128,6 +1415,7 @@ void buildDrums (Ctx& c)
     // This drum seed's version of the genre's beat (same across sections, so the song holds together)
     Rng mr (seedFor (c.s.drumSeed, 211, (uint64_t) c.s.genre));
     BarLines barA = toLines (c.g.drumA), barB = toLines (c.g.drumB);
+    restyleDrums (barA, barB, mr, c.g);
     mutateDrums (barA, mr, c.g, c.s.complexity, c.s.density, false);
     mutateDrums (barB, mr, c.g, c.s.complexity, c.s.density, true);
 
@@ -1300,7 +1588,7 @@ void buildBass (Ctx& c)
             const double chordEnd = chords[(size_t) ci].start + chords[(size_t) ci].len;
             end = std::min (end, chordEnd);
             if (! sub) end = std::min (end, t + 1.5);
-            int p = bassRoot (chords[(size_t) ci].rootPc, sub);
+            int p = bassRoot (chords[(size_t) ci].bassNote(), sub);
             const bool onChord = std::abs (t - chords[(size_t) ci].start) < 0.3;
             if (! onChord && r.chance (0.15 + 0.25 * c.s.complexity)) p += r.chance (0.6) ? 12 : 7;
             out.push_back ({ t, std::max (0.1, end - t - 0.02), p, onChord ? 110 : 98 });
@@ -1331,7 +1619,7 @@ void buildBass (Ctx& c)
         const char ch = pat[(size_t) (st % 16)];
         const int ci = c.chordIndexAt (t);
         const bool chordStarts = std::abs (chords[(size_t) ci].start - t) < 1.0e-6;
-        int root = bassRoot (chords[(size_t) ci].rootPc, false);
+        int root = bassRoot (chords[(size_t) ci].bassNote(), false);
 
         auto noteFor = [&] (char sym)
         {
@@ -1366,7 +1654,7 @@ void buildBass (Ctx& c)
             if (std::abs (nextStart - (t + 0.5)) < 1.0e-6 && r.chance (0.35 + 0.4 * c.s.complexity))
             {
                 close (t);
-                const int target = bassRoot (chords[(size_t) ci + 1].rootPc, false);
+                const int target = bassRoot (chords[(size_t) ci + 1].bassNote(), false);
                 const int approach = r.chance (0.5) ? target - 1 : (r.chance (0.5) ? target + 1 : target - 2);
                 cur = { true, t, approach, 90 };
                 close (t + 0.45);
@@ -1518,6 +1806,246 @@ void applyGroove (Ctx& c)
     }
 }
 
+
+// ---------------------------------------------------------------- bass octave jumps
+// Now and then one bass note jumps an octave up (or down) - the bounce real bass lines have.
+void bassOctaveJumps (Ctx& c)
+{
+    auto& bass = c.p->lanes[BassLane];
+    if (bass.size() < 4) return;
+    Rng r (seedFor (c.s.bassSeed, 401, (uint64_t) c.s.variant[BassLane], (uint64_t) c.s.section));
+
+    int jumps = c.s.bars >= 16 ? 2 + (r.chance (0.5) ? 1 : 0)
+              : c.s.bars >= 8  ? 1 + (r.chance (0.4 + 0.3 * c.s.complexity) ? 1 : 0)
+                               : (r.chance (0.55) ? 1 : 0);
+    if (c.s.section == Intro || c.s.section == Outro) jumps = std::min (jumps, 1);
+
+    // candidates: notes that don't start a chord, weighted toward the end of each 4-bar phrase
+    std::vector<int> cand;
+    std::vector<double> weight;
+    for (int i = 0; i < (int) bass.size(); ++i)
+    {
+        const auto& n = bass[(size_t) i];
+        const int ci = c.chordIndexAt (n.start + 0.01);
+        if (std::abs (n.start - c.p->chords[(size_t) ci].start) < 0.1) continue;
+        const double inPhrase = std::fmod (n.start, 16.0) / 16.0;
+        cand.push_back (i);
+        weight.push_back (0.4 + inPhrase);
+    }
+    for (int j = 0; j < jumps && ! cand.empty(); ++j)
+    {
+        double total = 0; for (double w : weight) total += w;
+        double pick = r.uni() * total;
+        size_t k = 0;
+        for (; k + 1 < cand.size(); ++k) { pick -= weight[k]; if (pick <= 0) break; }
+        auto& n = bass[(size_t) cand[k]];
+        const bool up = (n.pitch + 12 <= 62) && (r.chance (0.7) || n.pitch - 12 < 24);
+        if (! up && n.pitch - 12 < 24) continue;
+        n.pitch += up ? 12 : -12;
+        n.vel = std::min (127, n.vel + 6);
+        // don't jump twice in the same bar
+        const double bar = std::floor (n.start / 4.0);
+        for (size_t q = cand.size(); q-- > 0;)
+            if (std::floor (bass[(size_t) cand[q]].start / 4.0) == bar) { cand.erase (cand.begin() + (long) q); weight.erase (weight.begin() + (long) q); }
+    }
+}
+
+// ---------------------------------------------------------------- close takes
+// Takes 1 and 2 of an idea: same seed, a few small changes, always in key.
+void varyTakes (Ctx& c)
+{
+    // Melody: move a few notes to neighbouring scale notes
+    if (int v = c.s.variant[MelodyLane]; v > 0)
+    {
+        auto& m = c.p->lanes[MelodyLane];
+        Rng r (seedFor (c.s.melodySeed, 503, (uint64_t) v));
+        if (m.size() > 3)
+        {
+            const int changes = std::max (2, (int) m.size() / 6) + v;
+            for (int k = 0; k < changes; ++k)
+            {
+                const int i = r.range (1, (int) m.size() - 2);   // keep the first and last note
+                const int st = c.stepOfPitch (m[(size_t) i].pitch);
+                const int d = r.chance (0.7) ? (r.chance (0.5) ? 1 : -1) : (r.chance (0.5) ? 2 : -2);
+                const int np = c.pitchOfStep (st + d);
+                if (np >= 48 && np <= 96) m[(size_t) i].pitch = np;
+            }
+            // split one long note into two
+            for (int tries = 0; tries < 8; ++tries)
+            {
+                const int i = r.range (0, (int) m.size() - 1);
+                auto n = m[(size_t) i];
+                if (n.len < 0.9) continue;
+                const double half = std::round (n.len * 2.0) / 4.0;
+                m[(size_t) i].len = half - 0.03;
+                n.start += half; n.len -= half;
+                n.pitch = c.pitchOfStep (c.stepOfPitch (n.pitch) + (r.chance (0.5) ? 1 : -1));
+                n.vel = std::max (40, n.vel - 10);
+                m.push_back (n);
+                break;
+            }
+            std::sort (m.begin(), m.end(), [] (const NoteEv& a, const NoteEv& b) { return a.start < b.start; });
+        }
+    }
+
+    // Chords: invert one or two of the chords (same chords, new voicing)
+    if (int v = c.s.variant[ChordsLane]; v > 0 && c.p->chords.size() > 1)
+    {
+        Rng r (seedFor (c.s.harmonySeed, 509, (uint64_t) v));
+        auto& spans = c.p->chords;
+        const int changes = 1 + (v > 1 || r.chance (0.5) ? 1 : 0);
+        for (int k = 0; k < changes; ++k)
+        {
+            auto& span = spans[(size_t) r.range (1, (int) spans.size() - 1)];
+            if (span.notes.size() < 3) continue;
+            std::sort (span.notes.begin(), span.notes.end());
+            const bool up = span.notes.front() + 12 <= 79 && (r.chance (0.5) || span.notes.back() - 12 < 48);
+            const int from = up ? span.notes.front() : span.notes.back();
+            const int to = from + (up ? 12 : -12);
+            if (std::find (span.notes.begin(), span.notes.end(), to) != span.notes.end()) continue;
+            for (auto& n : c.p->lanes[ChordsLane])
+                if (n.start >= span.start - 0.05 && n.start < span.start + span.len - 0.05 && n.pitch == from)
+                    n.pitch = to;
+            (up ? span.notes.front() : span.notes.back()) = to;
+            std::sort (span.notes.begin(), span.notes.end());
+        }
+    }
+
+    // Bass: one or two passing notes on the fifth (the octave jumps also move with the take)
+    if (int v = c.s.variant[BassLane]; v > 0)
+    {
+        auto& b = c.p->lanes[BassLane];
+        Rng r (seedFor (c.s.bassSeed, 521, (uint64_t) v));
+        for (int k = 0; k < v && b.size() > 3; ++k)
+        {
+            const int i = r.range (1, (int) b.size() - 1);
+            const int ci = c.chordIndexAt (b[(size_t) i].start + 0.01);
+            if (std::abs (b[(size_t) i].start - c.p->chords[(size_t) ci].start) < 0.1) continue;
+            const int np = b[(size_t) i].pitch + (r.chance (0.5) ? 7 : -5);
+            if (c.inScale (np) && np >= 24 && np <= 62) b[(size_t) i].pitch = np;
+        }
+    }
+
+    // Drums: a few ghost hats moved, and maybe a small snare fill into the next loop
+    if (int v = c.s.variant[DrumsLane]; v > 0)
+    {
+        auto& d = c.p->lanes[DrumsLane];
+        Rng r (seedFor (c.s.drumSeed, 523, (uint64_t) v));
+        auto hasHit = [&] (double t, int pitch)
+        {
+            for (auto& n : d) if (n.pitch == pitch && std::abs (n.start - t) < 0.06) return true;
+            return false;
+        };
+        // drop one or two hats
+        for (int k = 0; k < 1 + v / 2; ++k)
+        {
+            std::vector<size_t> hats;
+            for (size_t i = 0; i < d.size(); ++i) if (d[i].pitch == Drum::ClosedHat) hats.push_back (i);
+            if (hats.size() < 6) break;
+            d.erase (d.begin() + (long) hats[(size_t) r.range (0, (int) hats.size() - 1)]);
+        }
+        // add a few quiet 16th hats
+        for (int k = 0; k < 2 + v; ++k)
+        {
+            const double t = r.range (0, c.s.bars * 16 - 1) * 0.25;
+            if (! hasHit (t, Drum::ClosedHat)) d.push_back ({ c.swingTime (t), 0.1, Drum::ClosedHat, r.range (52, 72) });
+        }
+        // snare pickup into the loop
+        if (r.chance (0.6))
+        {
+            const double end = c.length;
+            for (double t : { end - 0.5, end - 0.25 })
+                if (! hasHit (t, Drum::Snare)) d.push_back ({ t, 0.1, Drum::Snare, r.range (70, 92) });
+        }
+        std::sort (d.begin(), d.end(), [] (const NoteEv& a, const NoteEv& b) { return a.start < b.start; });
+    }
+}
+
+
+// ---------------------------------------------------------------- MACHINE groove
+// The swing and timing of classic samplers, per part. MPCs swing the 16ths (50% straight,
+// 66% triplet) and play quantized-tight; the SP-1200 has its own lazy swing and a hard grid.
+void machineGroove (Ctx& c)
+{
+    struct Feel { double swing, tight; };
+    static const Feel feels[] = { { 0.50, 0.0 }, { 0.66, 0.55 }, { 0.58, 0.7 }, { 0.62, 0.6 }, { 0.61, 0.8 } };
+    for (int l = 0; l < kNumLanes; ++l)
+    {
+        const int m = c.s.machine[(size_t) l];
+        const double fl = std::clamp ((double) c.s.machineFlavor[(size_t) l], 0.0, 1.0);
+        if (m <= 0 || m > 4 || fl < 0.001) continue;
+        const double ex = std::clamp ((double) c.s.machineExaggerate[(size_t) l], 0.0, 1.0);
+        const double funk = std::clamp ((double) c.s.machineFunk[(size_t) l], 0.0, 1.0);
+        // EXAGGERATE pushes the swing toward a drunk 75%+ and locks the grid harder
+        const double baseSwing = std::min (0.8, 0.5 + (feels[m].swing - 0.5) * (1.0 + 1.6 * ex));
+        const double swing = 0.5 + (baseSwing - 0.5) * fl;
+        const double tight = std::min (0.95, feels[m].tight * (1.0 + 0.4 * ex)) * fl;
+        const uint32_t seed = (l == DrumsLane ? c.s.drumSeed : l == BassLane ? c.s.bassSeed : l == MelodyLane ? c.s.melodySeed : c.s.harmonySeed);
+        Rng r (seedFor (seed, 611 + (uint64_t) l, (uint64_t) c.s.variant[(size_t) l], (uint64_t) c.s.section));
+        // FUNK: the swing breathes bar to bar
+        std::vector<double> barSwing ((size_t) std::max (1, c.s.bars) + 1);
+        for (auto& b : barSwing) b = swing + funk * fl * (r.uni() - 0.5) * 0.1;
+
+        for (auto& n : c.p->lanes[(size_t) l])
+        {
+            const double q = std::round (n.start * 4.0) / 4.0;
+            if (std::abs (n.start - q) > 0.09) continue;    // not on the 16th grid (triplets, strums...)
+            const bool off16 = ((long long) std::llround (q * 4.0)) % 2 != 0;
+            const size_t bar = (size_t) std::clamp ((int) (q / 4.0), 0, (int) barSwing.size() - 1);
+            const double delta = 0.5 * barSwing[bar] - 0.25;
+            const double humanOff = n.start - q;
+            double ns = q + (off16 ? delta : 0.0) + humanOff * (1.0 - tight);
+            if (funk > 0.001)
+            {
+                const double k = funk * fl;
+                double push = (r.uni() - 0.5) * 0.07 * k;                         // loose hands
+                if (l == DrumsLane)
+                {
+                    if (n.pitch == Drum::Snare || n.pitch == Drum::Clap) push += 0.035 * k;   // snare lays back
+                    if (n.pitch == Drum::Kick && ! off16) push -= 0.015 * k;                // kick leans forward
+                }
+                else if (off16) push += 0.02 * k;
+                ns += push;
+                // accents: some hits pop, some fall back to ghosts
+                const double roll = r.uni();
+                int v = n.vel;
+                if (roll < 0.18 * k) v += 18;
+                else if (roll > 1.0 - 0.22 * k) v -= 28;
+                else v += (int) std::lround ((r.uni() - 0.5) * 20.0 * k);
+                n.vel = std::clamp (v, 18, 127);
+            }
+            if (off16) n.len = std::max (0.03, n.len - (ns - n.start));
+            n.start = std::max (0.0, ns);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- LENGTH dial
+void applyNoteLength (Ctx& c)
+{
+    for (int l = 0; l < kNumLanes; ++l)
+    {
+        const double f = std::clamp ((double) c.s.noteLength[(size_t) l], 0.1, 2.0);
+        if (std::abs (f - 1.0) < 1.0e-3) continue;
+        auto& v = c.p->lanes[(size_t) l];
+        std::sort (v.begin(), v.end(), [] (const NoteEv& a, const NoteEv& b) { return a.start < b.start; });
+        const bool capAtNext = l != DrumsLane;   // longer notes stretch up to the next note, never over it
+        for (size_t i = 0; i < v.size(); ++i)
+        {
+            double len = std::max (0.03, v[i].len * f);
+            if (f > 1.0 && capAtNext)
+            {
+                double next = c.length;
+                for (size_t j = i + 1; j < v.size(); ++j)
+                    if (v[j].start > v[i].start + 0.05) { next = v[j].start; break; }
+                len = std::max (v[i].len, std::min (len, next - v[i].start - 0.02));
+            }
+            len = std::min (len, c.length - v[i].start - 0.01);
+            v[i].len = std::max (0.03, len);
+        }
+    }
+}
+
 Pattern composeSection (const Settings& in)
 {
     Settings s = in;
@@ -1546,8 +2074,12 @@ Pattern composeSection (const Settings& in)
     buildMelody (c);
     buildDrums (c);
     buildBass (c);
+    bassOctaveJumps (c);
+    varyTakes (c);
     strumChords (c);
     applyGroove (c);
+    machineGroove (c);
+    applyNoteLength (c);
     return p;
 }
 } // namespace

@@ -24,6 +24,15 @@ namespace Col
     const juce::Colour green      { 0xff4cff6a };
     const juce::Colour violet     { 0xffc77dff };
     const juce::Colour lcd        { 0xff0a0b08 };
+    // console caps
+    const juce::Colour capRed     { 0xffc8322b };
+    const juce::Colour capBlue    { 0xff2f5fae };
+    const juce::Colour capGreen   { 0xff3d8a4e };
+    const juce::Colour capBrown   { 0xff7a5132 };
+    const juce::Colour capWhite   { 0xffe6e3da };
+    const juce::Colour capGrey    { 0xff8d9299 };
+    const juce::Colour capBlack   { 0xff232428 };
+    const juce::Colour capOrange  { 0xffe07a1f };
 }
 
 struct Fonts
@@ -66,6 +75,9 @@ public:
     Knob();
     void setMod (float v);
     void setBipolar (bool b) { getProperties().set ("bipolar", b); }
+    // Console colour cap (SSL style colour coding): red, blue, green, brown, white, grey, black, orange
+    void setCap (juce::Colour c) { getProperties().set ("cap", (juce::int64) c.getARGB()); }
+    void setSteps (int n) { getProperties().set ("steps", n); }   // stepped switch: ticks at every position
 };
 
 class LedButton : public juce::TextButton

@@ -171,117 +171,119 @@ Look::Look()
     setColour (juce::TextButton::textColourOnId, Col::engrave);
 }
 
+// Console knob: a Neve-style fluted charcoal skirt with a printed scale around it,
+// topped with an SSL-style colour cap and a white pointer line.
 void Look::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                              float start, float end, juce::Slider& s)
 {
     const float size = (float) juce::jmin (w, h);
     const auto c = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).getCentre();
-    const bool big = size >= 70.0f;
+    const bool big = size >= 90.0f;
 
-    const float ringR = size * 0.5f - 3.0f;
-    const float bodyR = ringR - (big ? size * 0.14f : size * 0.16f);
-    const float capR  = bodyR * 0.74f;
-
-    // --- LED ring -------------------------------------------------------------
-    const int segs = big ? 27 : 17;
-    const float dotR = juce::jlimit (1.6f, 3.0f, size * 0.026f);
+    const float scaleR = size * 0.5f - 1.0f;
+    const float skirtR = scaleR - juce::jmax (5.0f, size * 0.12f);
+    const float capR   = skirtR * (big ? 0.62f : 0.68f);
     const bool bipolar = (bool) s.getProperties().getWithDefault ("bipolar", false);
-    const float modPos = (float) (double) s.getProperties().getWithDefault ("mod", -1.0);
-    int modSeg = -1;
-    if (modPos >= 0.0f && std::abs (modPos - pos) > 0.01f)
-        modSeg = juce::roundToInt (modPos * (float) (segs - 1));
-
-    for (int i = 0; i < segs; ++i)
-    {
-        const float t = (float) i / (float) (segs - 1);
-        const float a = start + t * (end - start);
-        const auto pt = c.getPointOnCircumference (ringR - dotR, a);
-
-        bool lit;
-        if (bipolar) lit = (t >= juce::jmin (0.5f, pos) - 0.001f) && (t <= juce::jmax (0.5f, pos) + 0.001f);
-        else         lit = t <= pos + 0.001f && pos > 0.001f;
-
-        juce::Colour col = lit ? Col::amber : Col::amberDim;
-        if (i == modSeg) { col = Col::cyan; lit = true; }
-
-        if (lit)
-        {
-            g.setColour (col.withAlpha (0.22f));
-            g.fillEllipse (juce::Rectangle<float> (dotR * 4.0f, dotR * 4.0f).withCentre (pt));
-        }
-        g.setColour (col);
-        g.fillEllipse (juce::Rectangle<float> (dotR * 2.0f, dotR * 2.0f).withCentre (pt));
-    }
-
-    // --- Body: drop shadow, knurled skirt, metal cap ---------------------------
-    g.setColour (juce::Colours::black.withAlpha (0.6f));
-    g.fillEllipse (juce::Rectangle<float> (bodyR * 2.0f + 4.0f, bodyR * 2.0f + 4.0f).withCentre (c.translated (0.0f, 3.0f)));
-
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff474b52), c.translated (0.0f, -bodyR),
-                                             juce::Colour (0xff17181b), c.translated (0.0f, bodyR), false));
-    g.fillEllipse (juce::Rectangle<float> (bodyR * 2.0f, bodyR * 2.0f).withCentre (c));
-
-    const int ridges = big ? 60 : 36;
-    for (int i = 0; i < ridges; ++i)
-    {
-        const float a = juce::MathConstants<float>::twoPi * (float) i / (float) ridges;
-        g.setColour ((i % 2 == 0 ? juce::Colours::black : juce::Colours::white).withAlpha (i % 2 == 0 ? 0.35f : 0.06f));
-        g.drawLine (juce::Line<float> (c.getPointOnCircumference (capR + 1.0f, a), c.getPointOnCircumference (bodyR - 0.5f, a)), 1.0f);
-    }
-
-    juce::ColourGradient capGrad (juce::Colour (0xff7a7f88), c.translated (-capR * 0.5f, -capR * 0.6f),
-                                  juce::Colour (0xff25282d), c.translated (capR * 0.6f, capR * 0.8f), true);
-    g.setGradientFill (capGrad);
-    g.fillEllipse (juce::Rectangle<float> (capR * 2.0f, capR * 2.0f).withCentre (c));
-    g.setColour (juce::Colours::black.withAlpha (0.7f));
-    g.drawEllipse (juce::Rectangle<float> (capR * 2.0f, capR * 2.0f).withCentre (c), 1.0f);
-
-    // brushed rings on the cap
-    for (float rr = capR * 0.25f; rr < capR; rr += capR * 0.18f)
-    {
-        g.setColour (juce::Colours::white.withAlpha (0.035f));
-        g.drawEllipse (juce::Rectangle<float> (rr * 2.0f, rr * 2.0f).withCentre (c), 0.7f);
-    }
-
-    // pointer
+    const int steps = (int) s.getProperties().getWithDefault ("steps", 0);
+    const auto capCol = juce::Colour ((juce::uint32) (juce::int64) s.getProperties().getWithDefault ("cap", (juce::int64) Col::capGrey.getARGB()));
     const float ang = start + pos * (end - start);
-    const auto p0 = c.getPointOnCircumference (capR * 0.25f, ang);
-    const auto p1 = c.getPointOnCircumference (bodyR - 2.0f, ang);
-    g.setColour (juce::Colours::black.withAlpha (0.5f));
-    g.drawLine (juce::Line<float> (p0, p1).withShortenedStart (0.0f), big ? 4.5f : 3.5f);
-    g.setColour (juce::Colour (0xfff4f1ea));
-    g.drawLine (juce::Line<float> (p0, p1), big ? 2.6f : 2.0f);
+
+    // --- printed scale (Neve): ticks, a longer one at the ends / centre, the value lit in amber
+    const int ticks = steps > 1 ? steps : (big ? 31 : 11);
+    for (int i = 0; i < ticks; ++i)
+    {
+        const float t = (float) i / (float) (ticks - 1);
+        const float a = start + t * (end - start);
+        const bool major = steps > 1 || i == 0 || i == ticks - 1 || (bipolar && i == ticks / 2) || (big ? i % 5 == 0 : i % 5 == 0);
+        bool lit = bipolar ? (t >= juce::jmin (0.5f, pos) - 0.001f && t <= juce::jmax (0.5f, pos) + 0.001f)
+                           : (t <= pos + 0.001f && pos > 0.001f);
+        if (steps > 1) lit = std::abs (t - pos) < 0.5f / (float) (ticks - 1);
+        const float r0 = scaleR - (major ? juce::jmax (4.0f, size * 0.09f) : juce::jmax (2.5f, size * 0.055f));
+        g.setColour (lit ? Col::amber : juce::Colour (0xffd8d4c8).withAlpha (major ? 0.55f : 0.3f));
+        g.drawLine (juce::Line<float> (c.getPointOnCircumference (r0, a), c.getPointOnCircumference (scaleR, a)), major ? 1.4f : 1.0f);
+    }
+
+    // --- skirt: shadow, fluted charcoal body (Neve / Marconi)
+    g.setColour (juce::Colours::black.withAlpha (0.65f));
+    g.fillEllipse (juce::Rectangle<float> (skirtR * 2.0f + 3.0f, skirtR * 2.0f + 3.0f).withCentre (c.translated (0.0f, 2.5f)));
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff4a505a), c.translated (-skirtR * 0.4f, -skirtR),
+                                             juce::Colour (0xff15171b), c.translated (skirtR * 0.3f, skirtR), false));
+    g.fillEllipse (juce::Rectangle<float> (skirtR * 2.0f, skirtR * 2.0f).withCentre (c));
+    const int flutes = big ? 28 : 16;
+    for (int i = 0; i < flutes; ++i)
+    {
+        const float a = ang + juce::MathConstants<float>::twoPi * (float) i / (float) flutes;   // the flutes turn with the knob
+        const float lightness = 0.5f + 0.5f * std::cos (a + 0.9f);
+        g.setColour (juce::Colours::white.withAlpha (0.03f + 0.07f * lightness));
+        g.drawLine (juce::Line<float> (c.getPointOnCircumference (capR + 1.5f, a), c.getPointOnCircumference (skirtR - 1.0f, a)), big ? 2.2f : 1.6f);
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.drawLine (juce::Line<float> (c.getPointOnCircumference (capR + 1.5f, a + 0.06f), c.getPointOnCircumference (skirtR - 1.0f, a + 0.06f)), 0.8f);
+    }
+    g.setColour (juce::Colours::black.withAlpha (0.8f));
+    g.drawEllipse (juce::Rectangle<float> (skirtR * 2.0f, skirtR * 2.0f).withCentre (c), 1.0f);
+    // skirt pointer (Neve white line on the skirt)
+    g.setColour (juce::Colour (0xfff2efe6).withAlpha (0.85f));
+    g.drawLine (juce::Line<float> (c.getPointOnCircumference (capR + 1.0f, ang), c.getPointOnCircumference (skirtR - 1.5f, ang)), big ? 2.4f : 1.8f);
+
+    // --- SSL colour cap: domed plastic with a white line
+    const auto capBox = juce::Rectangle<float> (capR * 2.0f, capR * 2.0f).withCentre (c);
+    g.setColour (juce::Colours::black.withAlpha (0.55f));
+    g.fillEllipse (capBox.translated (0.0f, 1.2f));
+    juce::ColourGradient cg (capCol.brighter (0.45f), c.translated (-capR * 0.45f, -capR * 0.55f),
+                             capCol.darker (0.55f), c.translated (capR * 0.55f, capR * 0.75f), true);
+    g.setGradientFill (cg);
+    g.fillEllipse (capBox);
+    g.setColour (juce::Colours::white.withAlpha (0.22f));
+    g.fillEllipse (juce::Rectangle<float> (capR * 0.9f, capR * 0.5f).withCentre (c.translated (-capR * 0.18f, -capR * 0.45f)));
+    g.setColour (juce::Colours::black.withAlpha (0.6f));
+    g.drawEllipse (capBox, 0.9f);
+    const bool lightCap = capCol.getPerceivedBrightness() > 0.7f;
+    g.setColour (lightCap ? juce::Colour (0xff1b1c1f) : juce::Colour (0xfff7f5ef));
+    g.drawLine (juce::Line<float> (c.getPointOnCircumference (capR * 0.15f, ang), c.getPointOnCircumference (capR - 1.5f, ang)), big ? 3.0f : 2.0f);
 }
 
+// Console buttons: square SSL key caps, the LED as a lit lens in the cap
 void Look::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down)
 {
     auto r = b.getLocalBounds().toFloat().reduced (1.0f, 1.0f);
     const bool accent = (bool) b.getProperties().getWithDefault ("accent", false);
-    const float radius = 4.0f;
+    const float radius = 2.5f;
 
-    g.setColour (juce::Colours::black.withAlpha (0.6f));
-    g.fillRoundedRectangle (r.translated (0.0f, down ? 0.5f : 2.0f), radius);
+    // bezel
+    g.setColour (juce::Colours::black.withAlpha (0.75f));
+    g.fillRoundedRectangle (r, radius + 1.0f);
+    auto body = r.reduced (2.0f).translated (0.0f, down ? 1.0f : 0.0f);
 
-    juce::Colour top = accent ? juce::Colour (0xffd9751a) : juce::Colour (0xff43474e);
-    juce::Colour bot = accent ? juce::Colour (0xff8a3e0c) : juce::Colour (0xff25272c);
-    if (! b.isEnabled()) { top = top.withMultipliedBrightness (0.6f); bot = bot.withMultipliedBrightness (0.6f); }
+    juce::Colour top = accent ? juce::Colour (0xffe8842a) : juce::Colour (0xffd9d5cb);   // SSL off-white keys, orange for the big ones
+    juce::Colour bot = accent ? juce::Colour (0xff9b4710) : juce::Colour (0xff8f8b82);
+    if (! accent && ! (bool) b.getProperties().getWithDefault ("lightKey", false)) { top = juce::Colour (0xff4a4e56); bot = juce::Colour (0xff24262b); }
+    if (! b.isEnabled()) { top = top.withMultipliedBrightness (0.55f); bot = bot.withMultipliedBrightness (0.55f); }
     if (over && b.isEnabled()) { top = top.brighter (0.08f); bot = bot.brighter (0.05f); }
     if (down) std::swap (top, bot);
-
-    const auto body = r.translated (0.0f, down ? 1.0f : 0.0f);
     g.setGradientFill (juce::ColourGradient (top, body.getTopLeft(), bot, body.getBottomLeft(), false));
     g.fillRoundedRectangle (body, radius);
-
-    g.setColour (juce::Colours::white.withAlpha (accent ? 0.3f : 0.12f));
+    g.setColour (juce::Colours::white.withAlpha (accent ? 0.35f : 0.14f));
     g.drawHorizontalLine ((int) body.getY() + 1, body.getX() + radius, body.getRight() - radius);
-    g.setColour (juce::Colours::black.withAlpha (0.8f));
+    g.setColour (juce::Colours::black.withAlpha (0.85f));
     g.drawRoundedRectangle (body, radius, 1.0f);
 
     if ((bool) b.getProperties().getWithDefault ("led", false))
     {
         const auto col = juce::Colour ((juce::uint32) (juce::int64) b.getProperties().getWithDefault ("ledColour", (juce::int64) Col::amber.getARGB()));
-        const bool on = b.getToggleState() || (bool) b.getProperties().getWithDefault ("ledForce", false);
-        led (g, { body.getX() + 12.0f, body.getCentreY() }, 3.6f, col, on && b.isEnabled());
+        const bool on = (b.getToggleState() || (bool) b.getProperties().getWithDefault ("ledForce", false)) && b.isEnabled();
+        // a lens strip on the left of the key, lit when on
+        auto lens = juce::Rectangle<float> (6.0f, body.getHeight() - 8.0f).withCentre ({ body.getX() + 9.0f, body.getCentreY() });
+        g.setColour (juce::Colours::black.withAlpha (0.7f));
+        g.fillRoundedRectangle (lens.expanded (1.0f), 2.0f);
+        g.setColour (on ? col : col.withMultipliedBrightness (0.22f).withMultipliedSaturation (0.6f));
+        g.fillRoundedRectangle (lens, 1.5f);
+        if (on)
+        {
+            g.setColour (col.withAlpha (0.25f));
+            g.fillRoundedRectangle (lens.expanded (3.0f), 3.0f);
+            g.setColour (juce::Colours::white.withAlpha (0.5f));
+            g.fillRoundedRectangle (lens.withHeight (lens.getHeight() * 0.35f).reduced (1.0f, 0.5f), 1.0f);
+        }
     }
 }
 

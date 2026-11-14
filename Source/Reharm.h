@@ -34,18 +34,26 @@ struct GenSettings
     float color = 0.5f;          // plain triads ... lush 9ths / 11ths / 13ths
     float spice = 0.4f;          // passing chords, secondary dominants, suspensions, tritone subs
     float bassMotion = 0.3f;     // inversions and pedal bass
-    bool addBass = true;
+    bool addBass = true;         // also turns on wide "melodic" voicings (low bass, spread chord on top)
+    int flavor = 0;              // FLAVOR: 0 = the style's own chords, 1.. = a signature chord flavour
     uint32_t seed = 1;
 };
 
 const std::vector<std::string>& styleNames();
 const std::vector<std::string>& styleBlurbs();
+const std::vector<std::string>& flavorNames();   // [0] = "Auto"
+const std::vector<std::string>& flavorBlurbs();
+const std::vector<std::string>& gateNames();     // [0] = "Off"
+
+// GATE + LENGTH: chops each chord into a rhythm (gate > 0) and sets how long each hit rings
+// (length 0.1 .. 2, 1 = up to the next hit). Notes never overlap themselves.
+std::vector<NoteEv> applyGate (const std::vector<NoteEv>& notes, int gate, float length, double loopLen);
 
 // The learned progression, voiced and named (variation "ORIGINAL").
 Variation originalVariation (const ImportedProgression& src, const GenSettings& s);
 
-// Eight new progressions.
-std::vector<Variation> generateVariations (const ImportedProgression& src, const GenSettings& s, int count = 8);
+// New progressions. firstIndex picks where in the endless list to start (the IDEA dial: idea k = generateVariations (src, s, 1, k)).
+std::vector<Variation> generateVariations (const ImportedProgression& src, const GenSettings& s, int count = 8, int firstIndex = 0);
 
 // Turns chords into notes. keepRhythm = hit the chords where the original clip hit them.
 std::vector<NoteEv> renderVariation (const ImportedProgression& src, const Variation& v, bool keepRhythm);

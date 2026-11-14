@@ -31,7 +31,23 @@ juce::AudioProcessorValueTreeState::ParameterLayout MidiGenProcessor::createLayo
     flt ("bassMotion", "Bass Motion", 0.0f, 1.0f, 0.3f);
     bln ("addBass", "Add Bass Note", true);
     bln ("keepRhythm", "Keep Rhythm", true);
-    layout.add (std::make_unique<AudioParameterInt> (ParameterID { "selected", 1 }, "Selected Progression", 0, 8, 0));
+    layout.add (std::make_unique<AudioParameterInt> (ParameterID { "selected", 1 }, "Selected Progression", 0, MidiGenProcessor::kDial, MidiGenProcessor::kDial));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "flavor", 1 }, "Flavor", toStringArray (flavorNames()), 0));
+    layout.add (std::make_unique<AudioParameterInt> (ParameterID { "idea", 1 }, "Idea", 1, MidiGenProcessor::kIdeas, 1));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "gate", 1 }, "Gate", toStringArray (gateNames()), 0));
+    flt ("length", "Length", 0.1f, 2.0f, 1.0f);
+    flt ("envA", "Attack", 0.0f, 1.0f, 0.5f);
+    flt ("envD", "Decay", 0.0f, 1.0f, 0.5f);
+    flt ("envS", "Sustain", 0.0f, 1.0f, 0.5f);
+    flt ("envR", "Release", 0.0f, 1.0f, 0.5f);
+    flt ("hp", "High Pass", 0.0f, 1.0f, 0.0f);
+    flt ("lp", "Low Pass", 0.0f, 1.0f, 1.0f);
+    flt ("res", "Resonance", 0.0f, 1.0f, 0.2f);
+    flt ("mbLow", "Low Band", -12.0f, 12.0f, 0.0f);
+    flt ("mbMid", "Mid Band", -12.0f, 12.0f, 0.0f);
+    flt ("mbHigh", "High Band", -12.0f, 12.0f, 0.0f);
+    flt ("squash", "Squash", 0.0f, 1.0f, 0.0f);
+    bln ("keys", "Play Chords From Keys", false);
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "bars", 1 }, "Listen Length", StringArray { "4 Bars", "8 Bars", "16 Bars" }, 0));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "sound", 1 }, "Sound",
                                                         StringArray { "Plugin / Built-in", "Built-in", "MIDI Out Only" }, 0));
@@ -50,7 +66,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MidiGenProcessor::createLayo
 const std::vector<int>& MidiGenProcessor::patchList()
 {
     using P = hs::SketchSynth;
-    static const std::vector<int> list { P::EPiano, P::Piano, P::Pad, P::Strings, P::Pluck, P::Organ, P::SuperSaw, P::LoFiKeys };
+    static const std::vector<int> list { P::EPiano, P::Piano, P::Pad, P::Strings, P::Pluck, P::Organ, P::SuperSaw, P::LoFiKeys, P::FMBell };
     return list;
 }
 
@@ -60,8 +76,11 @@ int MidiGenProcessor::builtInPatch() const
     const int idx = (int) apvts.getRawParameterValue ("patch")->load();
     if (idx > 0 && idx <= (int) patchList().size()) return patchList()[(size_t) idx - 1];
     // Auto: the sound of the style
-    static const int byStyle[] = { P::Piano, P::Pad, P::Strings, P::Piano, P::Organ, P::Pluck, P::EPiano, P::SuperSaw };
-    const int st = juce::jlimit (0, 7, (int) apvts.getRawParameterValue ("style")->load());
+    static const int byStyle[] = { P::Piano, P::Pad, P::Strings, P::Piano, P::Organ, P::Pluck, P::EPiano, P::SuperSaw,
+                                   P::EPiano, P::LoFiKeys, P::Organ, P::SuperSaw, P::SuperSaw, P::Piano, P::Piano, P::LoFiKeys,
+                                   P::Organ, P::Pluck, P::EPiano, P::SuperSaw, P::FMBell, P::Piano };
+    constexpr int nStyles = (int) (sizeof (byStyle) / sizeof (byStyle[0]));
+    const int st = juce::jlimit (0, nStyles - 1, (int) apvts.getRawParameterValue ("style")->load());
     return byStyle[st];
 }
 
@@ -75,6 +94,10 @@ MidiGenProcessor::MidiGenProcessor()
     pBass = raw ("bassMotion"); pAddBass = raw ("addBass"); pRhythm = raw ("keepRhythm"); pSel = raw ("selected");
     pBars = raw ("bars"); pSound = raw ("sound"); pVol = raw ("vol"); pMidiOut = raw ("midiOut");
     pPlay = raw ("play"); pBpm = raw ("bpm");
+    pFlavor = raw ("flavor"); pIdea = raw ("idea"); pGate = raw ("gate"); pLength = raw ("length");
+    pA = raw ("envA"); pD = raw ("envD"); pS = raw ("envS"); pR = raw ("envR");
+    pHp = raw ("hp"); pLp = raw ("lp"); pRes = raw ("res");
+    pLow = raw ("mbLow"); pMid = raw ("mbMid"); pHigh = raw ("mbHigh"); pSquash = raw ("squash"); pKeys = raw ("keys");
     seed = (juce::uint32) juce::Random::getSystemRandom().nextInt() | 1u;
     activeOff.fill (-1.0);
     toInst.ensureSize (2048); outMidi.ensureSize (4096);
@@ -104,8 +127,27 @@ GenSettings MidiGenProcessor::currentSettings() const
     s.spice = pSpice->load();
     s.bassMotion = pBass->load();
     s.addBass = pAddBass->load() > 0.5f;
+    s.flavor = (int) pFlavor->load();
     s.seed = seed;
     return s;
+}
+
+std::vector<float> MidiGenProcessor::settingsKey() const
+{
+    return { pStyle->load(), pSim->load(), pColor->load(), pSpice->load(), pBass->load(), pAddBass->load(), pRhythm->load(),
+             pFlavor->load(), pIdea->load(), pGate->load(), pLength->load(), (float) (seed & 0xffff), (float) (seed >> 16) };
+}
+
+int MidiGenProcessor::getIdea() const { return (int) pIdea->load(); }
+
+void MidiGenProcessor::setIdea (int idea)
+{
+    if (auto* p = apvts.getParameter ("idea"))
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (p->convertTo0to1 ((float) juce::jlimit (1, kIdeas, idea)));
+        p->endChangeGesture();
+    }
 }
 
 void MidiGenProcessor::timerCallback()
@@ -116,47 +158,87 @@ void MidiGenProcessor::timerCallback()
         static const double bars[] = { 4, 8, 16 };
         const double L = bars[juce::jlimit (0, 2, (int) pBars->load())] * 4.0;
         listenState.store (0);
-        if (auto* p = apvts.getParameter ("selected")) p->setValueNotifyingHost (0.0f);
+        if (auto* p = apvts.getParameter ("selected")) p->setValueNotifyingHost (1.0f);   // hear the dial
         if (! notes.empty())
             setSource (analyseImport (notes, L, "Learned from the track"));
         sendChangeMessage();
     }
 
-    const auto s = currentSettings();
-    const bool changed = ! haveLast || s.style != lastSettings.style || s.seed != lastSettings.seed
-                      || std::abs (s.similarity - lastSettings.similarity) > 1e-4f || std::abs (s.color - lastSettings.color) > 1e-4f
-                      || std::abs (s.spice - lastSettings.spice) > 1e-4f || std::abs (s.bassMotion - lastSettings.bassMotion) > 1e-4f
-                      || s.addBass != lastSettings.addBass;
-    const bool rhythm = pRhythm->load() > 0.5f;
-    if (changed || dirty || rhythm != lastRhythm) { lastRhythm = rhythm; rebuild(); }
+    // turning the dial plays the dial
+    const auto key = settingsKey();
+    if (! haveLast || dirty || key != lastKey)
+    {
+        const bool ideaMoved = haveLast && ! lastKey.empty() && key[8] != lastKey[8];
+        rebuild();
+        if (ideaMoved && getSelected() != kDial) select (kDial);
+    }
 
     std::unique_ptr<PlayData> trash;
     {
         const juce::SpinLock::ScopedTryLockType tl (swapLock);
-        if (tl.isLocked() && pending == nullptr) trash = std::move (retired);
+        if (tl.isLocked()) trash = std::move (retired);   // the audio thread is done with it once it's here
     }
 }
 
 void MidiGenProcessor::rebuild()
 {
     const auto s = currentSettings();
+    const bool rhythm = pRhythm->load() > 0.5f;
+    const int gate = (int) pGate->load();
+    const float length = pLength->load();
+    const int idea = juce::jlimit (1, kIdeas, (int) pIdea->load());
+
     variations.clear();
     auto d = std::make_unique<PlayData>();
+    const double L = hasSource() ? source->lengthBeats : 16.0;
+    d->length = L;
+
+    auto addTake = [&] (const std::vector<NoteEv>& raw, bool shape)
+    {
+        const auto notes = shape ? applyGate (raw, gate, length, L) : raw;
+        std::vector<PlayData::Ev> evs;
+        juce::uint64 h = 1469598103934665603ull;
+        for (auto& n : notes)
+        {
+            evs.push_back ({ n.start, n.start + n.len, n.pitch, n.vel });
+            h = (h ^ (juce::uint64) (n.pitch * 131 + (int) std::lround (n.start * 960) * 7 + (int) std::lround (n.len * 96))) * 1099511628211ull;
+        }
+        std::sort (evs.begin(), evs.end(), [] (const PlayData::Ev& a, const PlayData::Ev& b) { return a.start < b.start; });
+        d->takes.push_back (std::move (evs));
+        d->hashes.push_back (h);
+    };
+    auto addChords = [&] (const hs::Variation& v)
+    {
+        std::vector<std::vector<int>> cs;
+        for (auto& c : v.chords) cs.push_back (c.notes);
+        d->chords.push_back (std::move (cs));
+    };
+
+    // 0: the original
+    if (hasSource()) { variations.push_back (originalVariation (*source, s)); addTake (source->notes, false); }
+    else { hs::Variation o; o.label = "ORIGINAL"; variations.push_back (o); addTake ({}, false); }
+    addChords (variations.back());
+    // 1..8: saved slots (frozen: they keep their chords whatever you turn)
+    for (int i = 0; i < kSlots; ++i)
+    {
+        auto v = saved[(size_t) i].v;
+        v.label = std::string (1, (char) ('A' + i));
+        variations.push_back (v);
+        addTake (saved[(size_t) i].notes, true);
+        addChords (v);
+    }
+    // 9: the idea on the dial
     if (hasSource())
     {
-        variations.push_back (originalVariation (*source, s));
-        for (auto& v : generateVariations (*source, s, 8)) variations.push_back (v);
-        d->length = source->lengthBeats;
-        const bool rhythm = pRhythm->load() > 0.5f;
-        for (size_t i = 0; i < variations.size(); ++i)
-        {
-            std::vector<PlayData::Ev> evs;
-            const auto notes = i == 0 ? source->notes : renderVariation (*source, variations[i], rhythm);
-            for (auto& n : notes) evs.push_back ({ n.start, n.start + n.len, n.pitch, n.vel });
-            std::sort (evs.begin(), evs.end(), [] (const PlayData::Ev& a, const PlayData::Ev& b) { return a.start < b.start; });
-            d->takes.push_back (std::move (evs));
-        }
+        auto gen = generateVariations (*source, s, 1, idea - 1);
+        auto v = gen.empty() ? hs::Variation() : gen.front();
+        v.label = "IDEA " + std::to_string (idea);
+        addTake (v.chords.empty() ? std::vector<NoteEv>() : renderVariation (*source, v, rhythm), true);
+        variations.push_back (v);
     }
+    else { hs::Variation v; v.label = "IDEA " + std::to_string (idea); variations.push_back (v); addTake ({}, false); }
+    addChords (variations.back());
+
     {
         std::unique_ptr<PlayData> trash;
         const juce::SpinLock::ScopedLockType sl (swapLock);
@@ -165,10 +247,38 @@ void MidiGenProcessor::rebuild()
         if (current == nullptr) current = std::move (pending);
     }
     lastSettings = s;
+    lastKey = settingsKey();
     haveLast = true;
     dirty = false;
     ++version;
     sendChangeMessage();
+}
+
+int MidiGenProcessor::save()
+{
+    if (! hasSource() || (int) variations.size() <= kDial || variations[(size_t) kDial].chords.empty()) return -1;
+    for (int i = 0; i < kSlots; ++i)
+        if (saved[(size_t) i].v.chords.empty())
+        {
+            auto& sl = saved[(size_t) i];
+            sl.v = variations[(size_t) kDial];
+            sl.v.tags = sl.v.label + (sl.v.tags.empty() ? "" : "  " + sl.v.tags);
+            sl.notes = renderVariation (*source, sl.v, pRhythm->load() > 0.5f);
+            sl.length = source->lengthBeats;
+            dirty = true;
+            rebuild();
+            return i + 1;
+        }
+    return -1;
+}
+
+void MidiGenProcessor::clearSlot (int index)
+{
+    if (index < 1 || index > kSlots) return;
+    saved[(size_t) index - 1] = Saved {};
+    if (getSelected() == index) select (kDial);
+    dirty = true;
+    rebuild();
 }
 
 void MidiGenProcessor::setSource (std::shared_ptr<ImportedProgression> src)
@@ -188,10 +298,11 @@ void MidiGenProcessor::generate()
 
 void MidiGenProcessor::select (int index)
 {
+    if (index >= 1 && index <= kSlots && ! slotUsed (index)) return;
     if (auto* p = apvts.getParameter ("selected"))
     {
         p->beginChangeGesture();
-        p->setValueNotifyingHost (p->convertTo0to1 ((float) juce::jlimit (0, 8, index)));
+        p->setValueNotifyingHost (p->convertTo0to1 ((float) juce::jlimit (0, (int) kDial, index)));
         p->endChangeGesture();
     }
 }
@@ -252,7 +363,7 @@ bool MidiGenProcessor::learnFromFile (const juce::File& file, juce::String& erro
     const bool hint = keyFromName (nm, pc, mn);
     auto imp = analyseImport (notes, lastTick / tpq, nm, hint ? pc : -1, hint ? (mn ? 1 : 0) : -1);
     if (imp->spans.empty()) { error = "No chords found in " + file.getFileName(); return false; }
-    if (auto* p = apvts.getParameter ("selected")) p->setValueNotifyingHost (0.0f);
+    if (auto* p = apvts.getParameter ("selected")) p->setValueNotifyingHost (1.0f);   // hear the dial
     setSource (imp);
     return true;
 }
@@ -263,6 +374,7 @@ void MidiGenProcessor::prepareToPlay (double sr, int)
     sampleRateHz = sr;
     prepared = true;
     keys.prepare (sr, SketchSynth::Keys);
+    tone.prepare (sr);
     chunkBuf.setSize (2, kChunk);
     const juce::ScopedLock sl (instLock);
     if (instrument != nullptr)
@@ -287,6 +399,7 @@ void MidiGenProcessor::killNotes (juce::MidiBuffer& dest, int pos)
         if (activeOff[(size_t) p] >= 0.0)
         {
             dest.addEvent (juce::MidiMessage::noteOff (1, p), pos);
+            if (sendOutNow) outMidi.addEvent (juce::MidiMessage::noteOff (1, p), chunkStartNow + pos);
             activeOff[(size_t) p] = -1.0;
         }
 }
@@ -302,6 +415,7 @@ void MidiGenProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         if (tl.isLocked() && pending != nullptr && retired == nullptr) { retired = std::move (current); current = std::move (pending); }
     }
     const PlayData* d = current.get();
+    keys.setEnvelope (pA->load(), pD->load(), pS->load(), pR->load());
 
     double bpm = pBpm->load(), hostPpq = 0.0;
     bool hostPlaying = false;
@@ -313,6 +427,7 @@ void MidiGenProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             if (auto p = pos->getPpqPosition()) hostPpq = *p;
         }
     bpm = juce::jlimit (20.0, 400.0, bpm);
+    hostSynced.store (hostPlaying);
     displayBpm.store (bpm);
     const double bps = bpm / (60.0 * sampleRateHz);
     const bool internalPlay = pPlay->load() > 0.5f && ! hostPlaying;
@@ -336,15 +451,25 @@ void MidiGenProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     {
         const int len = juce::jmin (kChunk, n - start);
         toInst.clear();
+        chunkStartNow = start;
+        sendOutNow = midiOutOn || sound == 2;
 
         const bool running = hostPlaying || internalPlay;
         const double c0 = (hostPlaying ? hostPpq : internalClock) + start * bps;
         const double c1 = c0 + len * bps;
         const int ls = listenState.load (std::memory_order_acquire);
-        const bool replacing = d != nullptr && take > 0 && take < (int) d->takes.size() && ls == 0;
+        const bool keyMode = pKeys->load() > 0.5f && ls == 0;
+        if (keyMode != wasKeys) { releaseKeys (toInst, 0); killNotes (toInst, 0); wasKeys = keyMode; }
+        const bool replacing = d != nullptr && take > 0 && take < (int) d->takes.size() && ls == 0 && ! keyMode;
         const bool auditionOriginal = d != nullptr && take == 0 && ! hostPlaying && internalPlay && ! d->takes.empty();
 
-        if (take != lastTake) { killNotes (toInst, 0); lastTake = take; }
+        // a different take, or the notes of this take changed (dial turned, knob moved): re-strike the chord now
+        {
+            const juce::uint64 h = d != nullptr && take < (int) d->hashes.size() ? d->hashes[(size_t) take] : 0;
+            if (take != lastTake || h != lastHash) { chasePending = true; lastTake = take; lastHash = h; }
+            // DAW <-> built-in clock: start clean
+            if (hostPlaying != lastWasHost) { killNotes (toInst, 0); lastWasHost = hostPlaying; chasePending = true; }
+        }
 
         // ---- LISTEN: wait for bar 1 of the loop, then record exactly one loop
         if (ls == 1 && running)
@@ -375,6 +500,33 @@ void MidiGenProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
                     recOpen[(size_t) p] = -1.0;
                 }
             }
+            if (keyMode && m.isNoteOnOrOff() && d != nullptr && take < (int) d->chords.size())
+            {
+                // KEYS: a white key plays a whole chord of the selected progression, for as long as it's held
+                const int key = m.getNoteNumber();
+                if (m.isNoteOn())
+                {
+                    const auto& cs = d->chords[(size_t) take];
+                    const int ci = chordForKey (key, (int) cs.size());
+                    if (ci < 0) continue;
+                    for (int p : keyHeld[(size_t) key]) if (--keyCount[(size_t) p] == 0) send (juce::MidiMessage::noteOff (1, p), pos, start);
+                    keyHeld[(size_t) key] = cs[(size_t) ci];
+                    for (int p : keyHeld[(size_t) key])
+                    {
+                        if (keyCount[(size_t) p]++ > 0) send (juce::MidiMessage::noteOff (1, p), pos, start);   // re-strike a shared note
+                        send (juce::MidiMessage::noteOn (1, p, m.getVelocity()), pos, start);
+                    }
+                    heldChordIdx.store (ci);
+                }
+                else
+                {
+                    for (int p : keyHeld[(size_t) key]) if (keyCount[(size_t) p] > 0 && --keyCount[(size_t) p] == 0) send (juce::MidiMessage::noteOff (1, p), pos, start);
+                    keyHeld[(size_t) key].clear();
+                    bool any = false; for (auto& kh : keyHeld) any = any || ! kh.empty();
+                    if (! any) heldChordIdx.store (-1);
+                }
+                continue;
+            }
             if (m.isNoteOnOrOff() && replacing) continue;   // the new progression plays instead
             send (m, pos, start);
         }
@@ -391,12 +543,20 @@ void MidiGenProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             }
         }
 
-        // ---- play the chosen progression in time
-        if (running && (replacing || auditionOriginal))
+        // ---- play the chosen progression in time (not in KEYS mode: your keyboard plays it)
+        if (running && ! keyMode && (replacing || auditionOriginal))
         {
             const auto& evs = d->takes[(size_t) take];
             auto posOf = [&] (double t) { return juce::jlimit (0, len - 1, (int) ((t - c0) / bps)); };
-            if (wasRunning && std::abs (c0 - lastClock) > 0.05) killNotes (toInst, 0);
+            if (wasRunning && std::abs (c0 - lastClock) > 0.05) { killNotes (toInst, 0); chasePending = true; }   // the DAW jumped / looped
+            if (! wasRunning) chasePending = true;
+            if (chasePending && sinceChase >= 0.09)
+            {
+                killNotes (toInst, 0);
+                chase (*d, take, c0, toInst, start, midiOutOn, sound);
+                chasePending = false;
+                sinceChase = 0.0;
+            }
             for (int p = 0; p < 128; ++p)
                 if (activeOff[(size_t) p] >= 0.0 && activeOff[(size_t) p] < c1)
                 {
@@ -461,8 +621,62 @@ void MidiGenProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         else if (sound == 2) keys.allNotesOff();
 
         if (internalPlay) internalClock += len * bps;
+        sinceChase += len / sampleRateHz;
+    }
+    {
+        mg::ToneSettings ts;
+        ts.hp = pHp->load(); ts.lp = pLp->load(); ts.res = pRes->load();
+        ts.low = pLow->load(); ts.mid = pMid->load(); ts.high = pHigh->load(); ts.squash = pSquash->load();
+        tone.process (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr, n, ts);
     }
     midi.swapWith (outMidi);
+}
+
+void MidiGenProcessor::releaseKeys (juce::MidiBuffer& dest, int pos)
+{
+    for (int p = 0; p < 128; ++p)
+        if (keyCount[(size_t) p] > 0)
+        {
+            dest.addEvent (juce::MidiMessage::noteOff (1, p), pos);
+            if (sendOutNow) outMidi.addEvent (juce::MidiMessage::noteOff (1, p), chunkStartNow + pos);
+            keyCount[(size_t) p] = 0;
+        }
+    for (auto& k : keyHeld) k.clear();
+    heldChordIdx.store (-1);
+}
+
+// White keys from C3 (MIDI 60) play chord 1, 2, 3...; it repeats every N white keys, up and down the keyboard
+int MidiGenProcessor::chordForKey (int note, int numChords)
+{
+    if (numChords <= 0) return -1;
+    static const int white[12] = { 0, -1, 1, -1, 2, 3, -1, 4, -1, 5, -1, 6 };
+    const int w = white[note % 12];
+    if (w < 0) return -1;
+    const int idx = (note / 12) * 7 + w - (60 / 12) * 7;   // white keys counted from C3
+    return ((idx % numChords) + numChords) % numChords;
+}
+
+juce::String MidiGenProcessor::keyName (int chordIndex)
+{
+    static const char* names[] = { "C", "D", "E", "F", "G", "A", "B" };
+    return juce::String (names[chordIndex % 7]) + juce::String (3 + chordIndex / 7);
+}
+
+// Plays the notes of the take that should already be sounding at c0 (so a change is heard at once, not at the next chord)
+void MidiGenProcessor::chase (const PlayData& d, int take, double c0, juce::MidiBuffer& dest, int chunkStart, bool midiOutOn, int sound)
+{
+    if (take < 0 || take >= (int) d.takes.size() || d.length <= 0) return;
+    const double t = std::fmod (std::fmod (c0, d.length) + d.length, d.length);
+    const double base = c0 - t;
+    for (auto& e : d.takes[(size_t) take])
+    {
+        if (e.start >= t - 1.0e-9) break;                 // starts in this chunk or later: played normally
+        if (e.end <= t + 0.03) continue;                  // already over (or about to be)
+        const auto on = juce::MidiMessage::noteOn (1, e.pitch, (juce::uint8) juce::jlimit (1, 127, (int) (e.vel * 0.9)));
+        dest.addEvent (on, 0);
+        if (midiOutOn || sound == 2) outMidi.addEvent (on, chunkStart);
+        activeOff[(size_t) e.pitch] = base + e.end;
+    }
 }
 
 // =============================================================================
@@ -475,10 +689,18 @@ juce::File MidiGenProcessor::writeMidiFile (int index)
     juce::MidiMessageSequence seq;
     seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) std::lround (60000000.0 / displayBpm.load())), 0);
     seq.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0);
+    const int gate = (int) pGate->load();
+    const float length = pLength->load();
+    auto notesOf = [&] (int i) -> std::vector<NoteEv>
+    {
+        if (i == 0) return source->notes;
+        if (i >= 1 && i <= kSlots) return applyGate (saved[(size_t) i - 1].notes, gate, length, saved[(size_t) i - 1].length);
+        if (i == kDial && (int) variations.size() > kDial) return applyGate (renderVariation (*source, variations[(size_t) kDial], rhythm), gate, length, L);
+        return {};
+    };
     auto add = [&] (int i, double offset)
     {
-        const auto notes = i == 0 ? source->notes : renderVariation (*source, variations[(size_t) i], rhythm);
-        for (auto& n : notes)
+        for (auto& n : notesOf (i))
         {
             seq.addEvent (juce::MidiMessage::noteOn (1, n.pitch, (juce::uint8) juce::jlimit (1, 127, n.vel)), (offset + n.start) * ppq);
             seq.addEvent (juce::MidiMessage::noteOff (1, n.pitch), (offset + n.start + n.len) * ppq);
@@ -487,13 +709,16 @@ juce::File MidiGenProcessor::writeMidiFile (int index)
     juce::String what;
     if (index < 0)
     {
-        for (int i = 1; i < (int) variations.size(); ++i) add (i, (i - 1) * L);
-        seq.addEvent (juce::MidiMessage::endOfTrack(), (double) (variations.size() - 1) * L * ppq);
-        what = "All 8";
+        int k = 0;
+        for (int i = 1; i <= kSlots; ++i) if (slotUsed (i)) add (i, (k++) * L);
+        if (k == 0) return {};
+        seq.addEvent (juce::MidiMessage::endOfTrack(), (double) k * L * ppq);
+        what = "Saved " + juce::String (k);
     }
     else
     {
-        index = juce::jlimit (0, (int) variations.size() - 1, index);
+        index = juce::jlimit (0, (int) kDial, index);
+        if (index >= 1 && index <= kSlots && ! slotUsed (index)) return {};
         add (index, 0.0);
         seq.addEvent (juce::MidiMessage::endOfTrack(), L * ppq);
         what = index == 0 ? juce::String ("Original") : juce::String (variations[(size_t) index].label);
@@ -573,6 +798,13 @@ void MidiGenProcessor::getStateInformation (juce::MemoryBlock& dest)
         for (auto& nt : source->notes) txt << juce::String (nt.start, 4) << "," << juce::String (nt.len, 4) << "," << nt.pitch << "," << nt.vel << ";";
         sx->setAttribute ("notes", txt);
     }
+    for (int i = 0; i < kSlots; ++i)
+        if (! saved[(size_t) i].v.chords.empty())
+        {
+            auto* x = root.createNewChildElement ("Slot");
+            x->setAttribute ("index", i);
+            x->setAttribute ("data", encode (saved[(size_t) i]));
+        }
     if (instrument != nullptr)
     {
         auto* ix = root.createNewChildElement ("Instrument");
@@ -606,6 +838,12 @@ void MidiGenProcessor::setStateInformation (const void* data, int size)
             seed = keepSeed;
         }
     }
+    for (auto& sl : saved) sl = Saved {};
+    for (auto* x : root->getChildWithTagNameIterator ("Slot"))
+    {
+        const int i = x->getIntAttribute ("index", -1);
+        if (i >= 0 && i < kSlots) decode (x->getStringAttribute ("data"), saved[(size_t) i]);
+    }
     if (auto* ix = root->getChildByName ("Instrument"))
     {
         juce::PluginDescription desc;
@@ -631,6 +869,51 @@ void MidiGenProcessor::setStateInformation (const void* data, int size)
     }
     dirty = true;
     rebuild();
+}
+
+// A saved slot as text: "tags|length|chord;chord...|note;note..."  chord = start,len,root,q,bass,changed,name,n1 n2 ...
+juce::String MidiGenProcessor::encode (const Saved& sl)
+{
+    juce::String t;
+    t << juce::String (sl.v.tags).replace ("|", "/") << "|" << juce::String (sl.length, 4) << "|";
+    for (auto& c : sl.v.chords)
+    {
+        t << juce::String (c.start, 4) << "," << juce::String (c.len, 4) << "," << c.rootPc << "," << (int) c.q << "," << c.bassPc << ","
+          << (c.changed ? 1 : 0) << "," << juce::String (c.name).replace (",", " ").replace (";", " ").replace ("|", " ") << ",";
+        for (int p : c.notes) t << p << " ";
+        t << ";";
+    }
+    t << "|";
+    for (auto& n : sl.notes) t << juce::String (n.start, 4) << "," << juce::String (n.len, 4) << "," << n.pitch << "," << n.vel << ";";
+    return t;
+}
+
+bool MidiGenProcessor::decode (const juce::String& text, Saved& sl)
+{
+    auto parts = juce::StringArray::fromTokens (text, "|", "");
+    if (parts.size() < 4) return false;
+    Saved out;
+    out.v.tags = parts[0].toStdString();
+    out.length = juce::jmax (1.0, parts[1].getDoubleValue());
+    for (auto& tok : juce::StringArray::fromTokens (parts[2], ";", ""))
+    {
+        auto f = juce::StringArray::fromTokens (tok, ",", "");
+        if (f.size() < 8) continue;
+        hs::GenChord c;
+        c.start = f[0].getDoubleValue(); c.len = f[1].getDoubleValue(); c.rootPc = f[2].getIntValue();
+        c.q = (hs::Q) juce::jlimit (0, (int) hs::Q::Maj7Sus2, f[3].getIntValue());
+        c.bassPc = f[4].getIntValue(); c.changed = f[5].getIntValue() != 0; c.name = f[6].toStdString();
+        for (auto& p : juce::StringArray::fromTokens (f[7], " ", "")) if (p.isNotEmpty()) c.notes.push_back (p.getIntValue());
+        out.v.chords.push_back (c);
+    }
+    for (auto& tok : juce::StringArray::fromTokens (parts[3], ";", ""))
+    {
+        auto f = juce::StringArray::fromTokens (tok, ",", "");
+        if (f.size() == 4) out.notes.push_back ({ f[0].getDoubleValue(), f[1].getDoubleValue(), f[2].getIntValue(), f[3].getIntValue() });
+    }
+    if (out.v.chords.empty()) return false;
+    sl = out;
+    return true;
 }
 
 juce::AudioProcessorEditor* MidiGenProcessor::createEditor() { return new MidiGenEditor (*this); }

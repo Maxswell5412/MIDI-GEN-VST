@@ -165,8 +165,19 @@ private:
         }
     }
 
-    static float adsr (Voice& v, float dt, float a, float d, float s, float r)
+public:
+    // ADSR shaping on top of each sound's own envelope: 0.5 = as designed, 0 .. 1 = shorter .. longer (sustain: lower .. higher)
+    void setEnvelope (float a, float d, float s, float r) noexcept { shA = a; shD = d; shS = s; shR = r; }
+private:
+    float shA = 0.5f, shD = 0.5f, shS = 0.5f, shR = 0.5f;
+    static float timeScale (float k) noexcept { return std::exp2 ((k - 0.5f) * 7.0f); }   // x1/11 .. x11
+
+    float adsr (Voice& v, float dt, float a, float d, float s, float r) const
     {
+        a = std::max (0.0005f, a * timeScale (shA) * (shA < 0.5f ? 1.0f : 1.6f));
+        d = std::max (0.01f, d * timeScale (shD));
+        r = std::max (0.004f, r * timeScale (shR));
+        s = shS < 0.5f ? s * shS * 2.0f : s + (1.0f - s) * (shS - 0.5f) * 2.0f;
         if (v.released)
         {
             v.env -= v.env * dt / r + dt * 0.002f;
@@ -450,6 +461,6 @@ private:
     double sr = 44100.0;
     Type type = Keys;
     int patch = EPiano;
-    std::array<Voice, 24> voices {};
+    std::array<Voice, 64> voices {};
 };
 } // namespace hs
